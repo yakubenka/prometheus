@@ -16,7 +16,17 @@ app = FastAPI(title="Prometheus", version="3.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 API_KEY      = os.environ.get("DASHBOARD_API_KEY", "")
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+# Пробуем все возможные названия переменной
+DATABASE_URL = (
+    os.environ.get("DATABASE_URL") or
+    os.environ.get("database_url") or
+    os.environ.get("DATABASE_PUBLIC_URL") or
+    os.environ.get("POSTGRES_URL") or
+    os.environ.get("PG_URL") or
+    ""
+)
+print(f"[STARTUP] DB: {'postgres' if DATABASE_URL else 'memory'}", flush=True)
+print(f"[STARTUP] ENV keys: {[k for k in os.environ if 'DATA' in k.upper() or 'PG' in k.upper() or 'POSTGRES' in k.upper()]}", flush=True)
 
 # ── PostgreSQL ─────────────────────────────────────────────────────────────────
 
