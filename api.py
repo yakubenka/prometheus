@@ -21,12 +21,14 @@ DATABASE_URL = (
     os.environ.get("DATABASE_URL") or
     os.environ.get("database_url") or
     os.environ.get("DATABASE_PUBLIC_URL") or
-    os.environ.get("POSTGRES_URL") or
-    os.environ.get("PG_URL") or
     ""
 )
+# psycopg2 требует postgresql:// а не postgres://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 print(f"[STARTUP] DB: {'postgres' if DATABASE_URL else 'memory'}", flush=True)
-print(f"[STARTUP] ENV keys: {[k for k in os.environ if 'DATA' in k.upper() or 'PG' in k.upper() or 'POSTGRES' in k.upper()]}", flush=True)
+print(f"[STARTUP] URL prefix: {DATABASE_URL[:30] if DATABASE_URL else 'none'}", flush=True)
 
 # ── PostgreSQL ─────────────────────────────────────────────────────────────────
 
