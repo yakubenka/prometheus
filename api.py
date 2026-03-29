@@ -75,7 +75,7 @@ def health():
             "ts": datetime.utcnow().isoformat()}
 
 @app.get("/api/overview")
-def overview(_=Depends(_auth)):
+def overview():
     if _store["overview"]:
         data = dict(_store["overview"])
         data["bot_running"] = _bot_alive()
@@ -90,23 +90,23 @@ def overview(_=Depends(_auth)):
     }
 
 @app.get("/api/signals")
-def signals(limit: int = 30, _=Depends(_auth)):
+def signals(limit: int = 30):
     return {"signals": _store["signals"][:limit]}
 
 @app.get("/api/positions")
-def positions(_=Depends(_auth)):
+def positions():
     return _store["positions"]
 
 @app.get("/api/smart_money")
-def smart_money(_=Depends(_auth)):
+def smart_money():
     return _store["smart_money"]
 
 @app.get("/api/learning")
-def learning(_=Depends(_auth)):
+def learning():
     return _store["learning"]
 
 @app.get("/api/audit")
-def audit(_=Depends(_auth)):
+def audit():
     return {"entries": []}
 
 @app.get("/api/backtest")

@@ -398,8 +398,7 @@ function switchTab(name) {
 
 // ── Fetch ──────────────────────────────────────────────────────────────────
 async function fetchJSON(path) {
-  const headers = API_KEY ? {'x-api-key': API_KEY} : {};
-  const r = await fetch(API + path, {headers, signal: AbortSignal.timeout(5000)});
+  const r = await fetch(API + path, {signal: AbortSignal.timeout(5000)});
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
