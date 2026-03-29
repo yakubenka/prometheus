@@ -287,6 +287,59 @@ class Prometheus:
 
         snap = self.risk.snapshot()
         self.tg.cycle_summary(ai_trades, sm_trades, snap["daily_pnl"])
+        self._push_to_api()
+
+    def _push_to_api(self) -> None:
+        """Отправить актуальные данные в API сервис."""
+        api_url = os.environ.get("API_PUSH_URL", "")
+        if not api_url:
+            return
+        try:
+            import requests as _r
+            snap     = self.risk.snapshot()
+            open_pos = self.risk.open_positions
+            closed   = [p for p in self.risk.closed_positions
+                        if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()]
+
+            def fmt(p):
+                return {
+                    "id": p.market_id, "question": p.question,
+                    "direction": p.direction, "price": p.entry_price,
+                    "size": p.size_usd, "pnl": p.pnl or 0,
+                    "age": "now", "tags": p.tags,
+                    "status": p.status, "type": p.signal_type,
+                }
+
+            payload = {
+                "overview": {
+                    "bot_running":       True,
+                    "dry_run":           cfg.dry_run,
+                    "pnl_today":         snap["daily_pnl"],
+                    "pnl_total":         snap["total_pnl"],
+                    "win_rate":          snap["win_rate"],
+                    "total_trades":      snap["total_trades"],
+                    "open_positions":    snap["open_positions"],
+                    "open_exposure":     snap["open_exposure"],
+                    "bankroll":          cfg.bankroll,
+                    "daily_loss_used":   snap["daily_loss_pct"],
+                    "signals_today":     self._daily_signals,
+                    "smart_money_today": self._daily_sm_alerts,
+                },
+                "positions": {
+                    "open":         [fmt(p) for p in open_pos],
+                    "closed_today": [fmt(p) for p in closed],
+                },
+            }
+
+            _r.post(
+                f"{api_url}/internal/push",
+                json=payload,
+                headers={"x-bot-key": cfg.dashboard_key},
+                timeout=5,
+            )
+            log.info("📤 Данные отправлены в API")
+        except Exception as e:
+            log.debug(f"Push to API failed: {e}")
 
     def _maybe_daily_report(self) -> None:
         now   = datetime.now(timezone.utc)
