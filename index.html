@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Prometheus">
+<title>Prometheus</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    max-width: 430px;
+    margin: 0 auto;
+    min-height: 100vh;
+  }
+  ::-webkit-scrollbar { display: none; }
+
+  /* Status bar */
+  .statusbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 24px 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .statusbar .center { font-size: 12px; color: rgba(255,255,255,0.5); font-weight: 500; letter-spacing: 0.06em; }
+
+  /* Live dot */
+  .live-dot {
+    position: relative;
+    display: inline-flex;
+    width: 8px; height: 8px;
+    flex-shrink: 0;
+    vertical-align: middle;
+  }
+  .live-dot .ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    opacity: 0.3;
+    animation: ping 2s ease-out infinite;
+  }
+  .live-dot .dot { width: 8px; height: 8px; border-radius: 50%; display: block; }
+  @keyframes ping {
+    0% { transform: scale(1); opacity: 0.3; }
+    100% { transform: scale(2.8); opacity: 0; }
+  }
+
+  /* Content */
+  .content { overflow-y: auto; padding-bottom: 90px; }
+
+  /* Cards */
+  .card {
+    background: #1c1c1e;
+    border-radius: 18px;
+    border: 1px solid rgba(255,255,255,0.1);
+    overflow: hidden;
+    margin: 0 16px 12px;
+  }
+  .card-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .card-row:last-child { border-bottom: none; }
+  .card-row .label { font-size: 15px; color: #fff; }
+  .card-row .value { font-size: 15px; font-weight: 600; color: #fff; }
+
+  /* Hero */
+  .hero { text-align: center; padding: 36px 0 20px; }
+  .hero .label { font-size: 12px; color: rgba(255,255,255,0.5); letter-spacing: 0.08em; margin-bottom: 10px; }
+  .hero .amount { font-size: 58px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
+  .hero .subtitle { font-size: 15px; color: rgba(255,255,255,0.5); margin-top: 10px; }
+
+  /* Stats row */
+  .stats-row { display: flex; }
+  .stat { flex: 1; padding: 14px 20px; border-right: 1px solid rgba(255,255,255,0.08); }
+  .stat:last-child { border-right: none; }
+  .stat .stat-label { font-size: 11px; color: rgba(255,255,255,0.5); margin-bottom: 4px; }
+  .stat .stat-value { font-size: 20px; font-weight: 600; }
+
+  /* Status card */
+  .status-card { padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
+  .status-left .slabel { font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 5px; }
+  .status-left .sval { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 600; }
+  .status-right { text-align: right; }
+  .status-right .rlabel { font-size: 11px; color: rgba(255,255,255,0.25); margin-bottom: 2px; }
+  .status-right .rval { font-size: 13px; color: rgba(255,255,255,0.5); }
+
+  /* Meter */
+  .meter { padding: 16px 20px; }
+  .meter-header { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 15px; }
+  .meter-header .mval { font-weight: 600; }
+  .meter-bar { height: 4px; background: #2c2c2e; border-radius: 2px; overflow: hidden; }
+  .meter-fill { height: 100%; border-radius: 2px; transition: width 0.8s ease; }
+  .meter-footer { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: rgba(255,255,255,0.25); }
+
+  /* Signal item */
+  .signal-item {
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    cursor: pointer;
+  }
+  .signal-item:last-child { border-bottom: none; }
+  .signal-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .signal-left { flex: 1; min-width: 0; padding-right: 12px; }
+  .signal-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 7px; }
+  .signal-question { font-size: 15px; font-weight: 500; line-height: 1.35; color: #fff; }
+  .signal-question.skip { color: rgba(255,255,255,0.25); }
+  .signal-right { text-align: right; flex-shrink: 0; }
+  .signal-size { font-size: 17px; font-weight: 700; color: #30d158; }
+  .signal-time { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 3px; }
+  .signal-detail {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: #2c2c2e;
+    border-radius: 12px;
+    font-size: 13px;
+    color: rgba(255,255,255,0.5);
+    line-height: 1.6;
+  }
+
+  /* Position item */
+  .pos-item { padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .pos-item:last-child { border-bottom: none; }
+  .pos-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .pos-left { flex: 1; min-width: 0; padding-right: 12px; }
+  .pos-question { font-size: 15px; font-weight: 500; line-height: 1.35; }
+  .pos-meta { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 5px; }
+  .pos-pnl { font-size: 20px; font-weight: 700; flex-shrink: 0; }
+
+  /* Badges */
+  .badge {
+    font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  /* Section title */
+  .section-title {
+    font-size: 12px; color: rgba(255,255,255,0.5);
+    margin: 20px 20px 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Empty state */
+  .empty { padding: 32px 20px; text-align: center; font-size: 14px; color: rgba(255,255,255,0.25); }
+
+  /* Spinner */
+  .spinner-wrap { display: flex; justify-content: center; padding: 32px; }
+  .spinner {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.1);
+    border-top-color: #0a84ff;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Tab bar */
+  .tabbar {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 100%; max-width: 430px;
+    background: rgba(0,0,0,0.9);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-top: 1px solid rgba(255,255,255,0.1);
+    display: flex;
+    padding-bottom: env(safe-area-inset-bottom, 8px);
+  }
+  .tab-btn {
+    flex: 1; border: none; background: none; cursor: pointer;
+    padding: 10px 0 4px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .tab-icon { font-size: 20px; line-height: 1; }
+  .tab-label { font-size: 9px; letter-spacing: 0.01em; }
+
+  /* Colors */
+  .green { color: #30d158; }
+  .red   { color: #ff453a; }
+  .blue  { color: #0a84ff; }
+  .yellow{ color: #ffd60a; }
+  .orange{ color: #ff9f0a; }
+  .gray  { color: rgba(255,255,255,0.5); }
+
+  .screen { display: none; }
+  .screen.active { display: block; }
+</style>
+</head>
+<body>
+
+<!-- Status bar -->
+<div class="statusbar">
+  <span id="clock">--:--</span>
+  <span class="center">PROMETHEUS</span>
+  <span class="gray">●●●</span>
+</div>
+
+<!-- Content -->
+<div class="content">
+  <!-- OVERVIEW -->
+  <div id="screen-overview" class="screen active">
+    <div style="padding: 0 20px 8px; display:flex; justify-content:flex-end; margin-top:8px;">
+      <span id="live-indicator" style="display:flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,0.5);">
+        <span class="live-dot"><span class="ring" id="ring" style="background:#ff453a"></span><span class="dot" id="dot" style="background:#ff453a"></span></span>
+        <span id="live-text">Mock</span>
+      </span>
+    </div>
+
+    <div class="hero">
+      <div class="label">TODAY'S P&L</div>
+      <div class="amount" id="pnl-today">$0.00</div>
+      <div class="subtitle" id="pnl-total">All time $0.00</div>
+    </div>
+
+    <div class="card">
+      <div class="status-card">
+        <div class="status-left">
+          <div class="slabel">Bot</div>
+          <div class="sval">
+            <span class="live-dot"><span class="ring" id="bot-ring" style="background:#ff453a"></span><span class="dot" id="bot-dot" style="background:#ff453a"></span></span>
+            <span id="bot-status">Stopped</span>
+            <span class="badge" id="mode-badge" style="background:rgba(255,159,10,0.15);color:#ff9f0a;border:1px solid rgba(255,159,10,0.2)">Paper</span>
+          </div>
+        </div>
+        <div class="status-right">
+          <div class="rlabel">Updated</div>
+          <div class="rval" id="updated-time">--:--</div>
+        </div>
+      </div>
+      <div style="height:1px;background:rgba(255,255,255,0.08);margin:0 20px"></div>
+      <div class="stats-row">
+        <div class="stat">
+          <div class="stat-label">Win Rate</div>
+          <div class="stat-value" id="win-rate">0%</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Trades</div>
+          <div class="stat-value" id="total-trades">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Open</div>
+          <div class="stat-value" id="open-pos">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="meter">
+        <div class="meter-header">
+          <span>Daily Loss Limit</span>
+          <span class="mval" id="loss-pct">0%</span>
+        </div>
+        <div class="meter-bar">
+          <div class="meter-fill" id="loss-bar" style="width:0%;background:#30d158"></div>
+        </div>
+        <div class="meter-footer"><span>$0</span><span>$50 limit</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-row"><span class="label">Signals today</span><span class="value" id="signals-today">0</span></div>
+      <div class="card-row"><span class="label">Smart money alerts</span><span class="value yellow" id="sm-today">0</span></div>
+      <div class="card-row"><span class="label">Bankroll</span><span class="value" id="bankroll">$100</span></div>
+      <div class="card-row"><span class="label">Open exposure</span><span class="value" id="exposure">$0.00</span></div>
+    </div>
+  </div>
+
+  <!-- SIGNALS -->
+  <div id="screen-signals" class="screen">
+    <div style="padding: 28px 20px 16px; display:flex; justify-content:space-between; align-items:flex-end;">
+      <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em">Signals</div>
+      <span id="live-sig" style="display:flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,0.5);">
+        <span class="live-dot"><span class="ring" style="background:#ff453a"></span><span class="dot" style="background:#ff453a"></span></span>Mock
+      </span>
+    </div>
+    <div class="card" id="signals-list"><div class="empty">No signals yet</div></div>
+  </div>
+
+  <!-- POSITIONS -->
+  <div id="screen-positions" class="screen">
+    <div style="text-align:center;padding:28px 0 16px;">
+      <div style="font-size:12px;color:rgba(255,255,255,0.5);letter-spacing:0.08em;margin-bottom:8px">UNREALISED P&L</div>
+      <div style="font-size:46px;font-weight:700;letter-spacing:-0.03em" id="unrealised">$0.00</div>
+    </div>
+    <div class="section-title" id="open-count">0 OPEN</div>
+    <div class="card" id="positions-list"><div class="empty">No open positions</div></div>
+  </div>
+
+  <!-- SMART MONEY -->
+  <div id="screen-smart" class="screen">
+    <div style="padding:28px 20px 4px;">
+      <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em">Smart Money</div>
+      <div style="font-size:15px;color:rgba(255,255,255,0.5);margin-top:4px" id="tracked-count">0 wallets tracked</div>
+    </div>
+    <div class="section-title">LEADERBOARD</div>
+    <div class="card" id="smart-list"><div class="empty">Bot is scanning...</div></div>
+  </div>
+
+  <!-- LEARNING -->
+  <div id="screen-learning" class="screen">
+    <div style="padding:28px 20px 4px;">
+      <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em">Learning</div>
+      <div style="font-size:15px;color:rgba(255,255,255,0.5);margin-top:4px">Signal accuracy over time</div>
+    </div>
+    <div class="section-title">SIGNAL ACCURACY</div>
+    <div class="card" id="learning-list"><div class="empty">Accumulating data...</div></div>
+  </div>
+</div>
+
+<!-- Tab bar -->
+<div class="tabbar">
+  <button class="tab-btn" onclick="switchTab('overview')" id="tab-overview">
+    <span class="tab-icon" style="color:#0a84ff">⊙</span>
+    <span class="tab-label" style="color:#0a84ff">Overview</span>
+  </button>
+  <button class="tab-btn" onclick="switchTab('signals')" id="tab-signals">
+    <span class="tab-icon" style="color:rgba(255,255,255,0.25)">↑</span>
+    <span class="tab-label" style="color:rgba(255,255,255,0.25)">Signals</span>
+  </button>
+  <button class="tab-btn" onclick="switchTab('positions')" id="tab-positions">
+    <span class="tab-icon" style="color:rgba(255,255,255,0.25)">⊞</span>
+    <span class="tab-label" style="color:rgba(255,255,255,0.25)">Positions</span>
+  </button>
+  <button class="tab-btn" onclick="switchTab('smart')" id="tab-smart">
+    <span class="tab-icon" style="color:rgba(255,255,255,0.25)">◈</span>
+    <span class="tab-label" style="color:rgba(255,255,255,0.25)">Smart $</span>
+  </button>
+  <button class="tab-btn" onclick="switchTab('learning')" id="tab-learning">
+    <span class="tab-icon" style="color:rgba(255,255,255,0.25)">◉</span>
+    <span class="tab-label" style="color:rgba(255,255,255,0.25)">Learning</span>
+  </button>
+</div>
+
+<script>
+const API = 'https://prometheus-production-850a.up.railway.app';
+const POLL = 10000;
+let isLive = false;
+let selSignal = null;
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+const usd  = n => '$' + Math.abs(+n || 0).toFixed(2);
+const sign = n => (+n >= 0 ? '+' : '−') + usd(n);
+const pct  = n => ((+n || 0) * 100).toFixed(1) + '%';
+const el   = id => document.getElementById(id);
+
+function badge(label) {
+  const colors = {
+    YES:'#30d158', NO:'#ff453a', '—':'rgba(255,255,255,0.25)',
+    Insider:'#ff453a', Sharp:'#ffd60a', Contrarian:'#0a84ff',
+    macro:'#0a84ff', crypto:'#ff9f0a', politics:'#ffd60a',
+    geopolitics:'#ff453a', sports:'#bf5af2',
+    smart_money:'#ffd60a', ensemble:'#0a84ff', skip:'rgba(255,255,255,0.2)',
+  };
+  const col = colors[label] || 'rgba(255,255,255,0.4)';
+  const txt = label === 'smart_money' ? 'Smart $' : label === 'ensemble' ? 'AI' : label;
+  return `<span class="badge" style="color:${col};background:${col}18;border:1px solid ${col}28">${txt}</span>`;
+}
+
+function setLive(live) {
+  isLive = live;
+  const col = live ? '#30d158' : '#ff453a';
+  const txt = live ? 'Live' : 'Mock';
+  document.querySelectorAll('.ring').forEach(e => e.style.background = col);
+  document.querySelectorAll('.dot').forEach(e => e.style.background = col);
+  el('live-text').textContent = txt;
+  el('live-sig').innerHTML = `<span class="live-dot"><span class="ring" style="background:${col}"></span><span class="dot" style="background:${col}"></span></span>${txt}`;
+}
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  el('clock').textContent = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  el('screen-' + name).classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const icon = b.querySelector('.tab-icon');
+    const lbl  = b.querySelector('.tab-label');
+    const active = b.id === 'tab-' + name;
+    icon.style.color = active ? '#0a84ff' : 'rgba(255,255,255,0.25)';
+    lbl.style.color  = active ? '#0a84ff' : 'rgba(255,255,255,0.25)';
+  });
+}
+
+// ── Fetch ──────────────────────────────────────────────────────────────────
+async function fetchJSON(path) {
+  const r = await fetch(API + path, {signal: AbortSignal.timeout(5000)});
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+// ── Overview ───────────────────────────────────────────────────────────────
+async function loadOverview() {
+  try {
+    const d = await fetchJSON('/api/overview');
+    setLive(true);
+
+    const up = (d.pnl_today || 0) >= 0;
+    el('pnl-today').textContent = sign(d.pnl_today || 0);
+    el('pnl-today').style.color = up ? '#30d158' : '#ff453a';
+    el('pnl-total').textContent = 'All time ' + sign(d.pnl_total || 0);
+
+    const alive = d.bot_running;
+    const botCol = alive ? '#30d158' : '#ff453a';
+    el('bot-ring').style.background = botCol;
+    el('bot-dot').style.background  = botCol;
+    el('bot-status').textContent = alive ? 'Running' : 'Stopped';
+
+    el('win-rate').textContent    = pct(d.win_rate || 0);
+    el('total-trades').textContent = d.total_trades || 0;
+    el('open-pos').textContent    = d.open_positions || 0;
+    el('signals-today').textContent = d.signals_today || 0;
+    el('sm-today').textContent    = d.smart_money_today || 0;
+    el('bankroll').textContent    = '$' + (d.bankroll || 100);
+    el('exposure').textContent    = usd(d.open_exposure || 0);
+    el('updated-time').textContent = new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+
+    const lp = d.daily_loss_used || 0;
+    el('loss-pct').textContent = (lp * 100).toFixed(1) + '%';
+    el('loss-bar').style.width = (lp * 100) + '%';
+    el('loss-bar').style.background = lp < 0.5 ? '#30d158' : lp < 0.8 ? '#ff9f0a' : '#ff453a';
+
+  } catch { setLive(false); }
+}
+
+// ── Signals ────────────────────────────────────────────────────────────────
+async function loadSignals() {
+  try {
+    const d = await fetchJSON('/api/signals');
+    const list = d.signals || [];
+    if (!list.length) { el('signals-list').innerHTML = '<div class="empty">No signals yet</div>'; return; }
+
+    el('signals-list').innerHTML = list.map((s, i) => {
+      const skip = s.type === 'skip' || s.direction === '—';
+      return `<div class="signal-item" onclick="toggleSignal(${i})">
+        <div class="signal-top">
+          <div class="signal-left">
+            <div class="signal-badges">${badge(s.type)}${badge(s.direction || '—')}${s.confidence && !skip ? `<span style="font-size:11px;color:rgba(255,255,255,0.5);align-self:center">${s.confidence}</span>` : ''}</div>
+            <div class="signal-question${skip?' skip':''}">${s.question || ''}</div>
+          </div>
+          <div class="signal-right">
+            ${(s.size||0) > 0 ? `<div class="signal-size">$${(+s.size).toFixed(2)}</div>` : '<div style="font-size:13px;color:rgba(255,255,255,0.25)">—</div>'}
+            <div class="signal-time">${s.time || ''}</div>
+          </div>
+        </div>
+        ${s.detail ? `<div class="signal-detail" id="sig-detail-${i}" style="display:none">${s.detail}${(s.edge||0)>0?`<div style="margin-top:8px;color:#30d158">Edge ${pct(s.edge)} · @ ${(+s.price||0).toFixed(3)}</div>`:''}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+function toggleSignal(i) {
+  const d = document.getElementById('sig-detail-' + i);
+  if (d) d.style.display = d.style.display === 'none' ? 'block' : 'none';
+}
+
+// ── Positions ──────────────────────────────────────────────────────────────
+async function loadPositions() {
+  try {
+    const d = await fetchJSON('/api/positions');
+    const open = d.open || [];
+    const total = open.reduce((s, p) => s + (+p.pnl || 0), 0);
+
+    el('unrealised').textContent = sign(total);
+    el('unrealised').style.color = total >= 0 ? '#30d158' : '#ff453a';
+    el('open-count').textContent = open.length + ' OPEN';
+
+    if (!open.length) { el('positions-list').innerHTML = '<div class="empty">No open positions</div>'; return; }
+
+    el('positions-list').innerHTML = open.map(p => {
+      const up = (+p.pnl || 0) >= 0;
+      return `<div class="pos-item">
+        <div class="pos-top">
+          <div class="pos-left">
+            <div class="signal-badges">${badge(p.direction)}${(p.tags||[]).map(badge).join('')}</div>
+            <div class="pos-question">${p.question || ''}</div>
+            <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)} · ${p.age || ''} ago</div>
+          </div>
+          <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+// ── Smart Money ────────────────────────────────────────────────────────────
+async function loadSmart() {
+  try {
+    const d = await fetchJSON('/api/smart_money');
+    const traders = d.traders || [];
+    el('tracked-count').textContent = (d.total_tracked || traders.length) + ' wallets tracked';
+
+    if (!traders.length) { el('smart-list').innerHTML = '<div class="empty">Bot is scanning...</div>'; return; }
+
+    const cc = {Insider:'#ff453a', Sharp:'#ffd60a', Contrarian:'#0a84ff'};
+    el('smart-list').innerHTML = traders.map((t, i) => {
+      const col = cc[t.class] || 'rgba(255,255,255,0.5)';
+      return `<div class="pos-item">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+              <span style="font-size:11px;font-weight:700;background:${col};color:#000;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
+              <span style="font-size:13px;color:rgba(255,255,255,0.5);font-family:monospace">${t.addr||''}</span>
+              ${badge(t.class)}
+            </div>
+            <div style="display:flex;gap:20px;padding-left:28px;margin-bottom:8px">
+              <div><div style="font-size:11px;color:rgba(255,255,255,0.25)">WR</div><div style="font-size:15px;font-weight:600">${pct(t.wr||0)}</div></div>
+              <div><div style="font-size:11px;color:rgba(255,255,255,0.25)">ROI</div><div style="font-size:15px;font-weight:600;color:#30d158">+${pct(t.roi||0)}</div></div>
+              <div><div style="font-size:11px;color:rgba(255,255,255,0.25)">Vol</div><div style="font-size:15px;font-weight:600">$${((t.vol||0)/1000).toFixed(0)}k</div></div>
+            </div>
+            <div style="padding-left:28px;display:flex;gap:5px;flex-wrap:wrap">${(t.domains||[]).map(badge).join('')}</div>
+          </div>
+          <div style="font-size:24px;font-weight:700;color:${col};flex-shrink:0">${pct(t.score||0)}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+// ── Learning ───────────────────────────────────────────────────────────────
+async function loadLearning() {
+  try {
+    const d = await fetchJSON('/api/learning');
+    const stats = d.signal_stats || {};
+    const names = ['sentiment','momentum','calibration','consensus','base_rate'];
+    const cols  = ['#0a84ff','#ff9f0a','#30d158','#ffd60a','#bf5af2'];
+
+    el('learning-list').innerHTML = names.map((name, i) => {
+      const s = stats[name];
+      const acc = s ? (s.accuracy || 0) : 0;
+      const col = cols[i];
+      const barCol = acc > 0.6 ? '#30d158' : acc > 0.5 ? '#ffd60a' : '#ff453a';
+      return `<div class="pos-item">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div>
+            <span style="font-size:15px;font-weight:500;text-transform:capitalize">${name}</span>
+            ${s ? `<span style="font-size:12px;color:rgba(255,255,255,0.5);margin-left:8px">n=${s.total}</span>` : ''}
+          </div>
+          <span style="font-size:17px;font-weight:700;color:${barCol}">${s ? pct(acc) : '—'}</span>
+        </div>
+        <div style="height:4px;background:#2c2c2e;border-radius:2px;overflow:hidden">
+          <div style="height:100%;border-radius:2px;width:${s ? (acc*100)+'%' : '0%'};background:${col};transition:width 0.8s ease"></div>
+        </div>
+        ${s && s.avg_edge ? `<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:6px">Avg edge ${pct(s.avg_edge)}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+// ── Poll ───────────────────────────────────────────────────────────────────
+async function refresh() {
+  await Promise.allSettled([
+    loadOverview(), loadSignals(), loadPositions(), loadSmart(), loadLearning()
+  ]);
+}
+
+refresh();
+setInterval(refresh, POLL);
+</script>
+</body>
+</html>
