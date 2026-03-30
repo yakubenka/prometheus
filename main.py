@@ -270,7 +270,7 @@ class Prometheus:
                 "confidence": result.confidence,
                 "prob":       round(result.ai_probability, 3),
                 "detail":     result.reasoning[:150],
-                "url":        f"https://polymarket.com/market/{market.id}",
+                "url":        f"https://polymarket.com/markets?_s={market.question[:50].replace(' ', '%20')}",
                 "traded":     False,
             })
             # Держим только последние 50
@@ -350,10 +350,12 @@ class Prometheus:
                 cur   = current_price if p.direction == "YES" else 1 - current_price
                 return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
 
-            def polymarket_url(market_id: str) -> str:
-                """Ссылка на рынок на Polymarket."""
-                if market_id:
-                    return f"https://polymarket.com/market/{market_id}"
+            def polymarket_url(market_id: str, question: str = "") -> str:
+                """Ссылка на рынок на Polymarket через поиск."""
+                if question:
+                    import urllib.parse
+                    q = urllib.parse.quote(question[:50])
+                    return f"https://polymarket.com/markets?_s={q}"
                 return "https://polymarket.com"
 
             def fmt(p, fetch_price: bool = False):
@@ -371,7 +373,7 @@ class Prometheus:
                     "tags":         p.tags,
                     "status":       p.status,
                     "type":         p.signal_type,
-                    "url":          polymarket_url(p.market_id),
+                    "url":          polymarket_url(p.market_id, p.question),
                     "token_id":     p.token_id or "",
                 }
 
