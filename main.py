@@ -270,7 +270,7 @@ class Prometheus:
                 "confidence": result.confidence,
                 "prob":       round(result.ai_probability, 3),
                 "detail":     result.reasoning[:150],
-                "url":        f"https://polymarket.com/event/{market.id}",
+                "url":        f"https://polymarket.com/market/{market.id}",
                 "traded":     False,
             })
             # Держим только последние 50
@@ -353,7 +353,7 @@ class Prometheus:
             def polymarket_url(market_id: str) -> str:
                 """Ссылка на рынок на Polymarket."""
                 if market_id:
-                    return f"https://polymarket.com/event/{market_id}"
+                    return f"https://polymarket.com/market/{market_id}"
                 return "https://polymarket.com"
 
             def fmt(p, fetch_price: bool = False):
