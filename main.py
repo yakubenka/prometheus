@@ -113,6 +113,7 @@ class Prometheus:
         self._daily_sm_alerts:  int             = 0
         self._last_report_date: date | None     = None
         self._last_limit_warn:  float           = 0.0
+        self._signal_history:   list            = []   # история сигналов для дашборда
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -258,6 +259,23 @@ class Prometheus:
                 f"prob={result.ai_probability:.2%} conf={result.confidence}"
             )
 
+            # Записываем сигнал в историю
+            self._signal_history.append({
+                "time":       datetime.now(timezone.utc).strftime("%H:%M"),
+                "type":       "ensemble",
+                "question":   market.question,
+                "direction":  result.direction,
+                "price":      round(market.yes_price, 3),
+                "edge":       round(result.edge, 4),
+                "confidence": result.confidence,
+                "prob":       round(result.ai_probability, 3),
+                "detail":     result.reasoning[:150],
+                "url":        f"https://polymarket.com/event/{market.id}",
+                "traded":     False,
+            })
+            # Держим только последние 50
+            self._signal_history = self._signal_history[-50:]
+
             if result.direction == "NEUTRAL":       continue
             if result.edge < cfg.min_edge:           continue
             if result.confidence == "low":           continue
@@ -283,6 +301,12 @@ class Prometheus:
                                price, decision.size_usd, list(market.tags),
                                "ai", token_id=token)
                 ai_trades += 1
+                # Помечаем сигнал как исполненный
+                for s in reversed(self._signal_history):
+                    if s.get("question") == market.question:
+                        s["traded"] = True
+                        s["size"]   = decision.size_usd
+                        break
 
             time.sleep(1.5)
 
@@ -302,14 +326,80 @@ class Prometheus:
             closed   = [p for p in self.risk.closed_positions
                         if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()]
 
-            def fmt(p):
+            def get_current_price(token_id: str) -> float:
+                """Текущая цена токена с Polymarket CLOB."""
+                if not token_id:
+                    return 0.0
+                try:
+                    r = _r.get(
+                        "https://clob.polymarket.com/midpoint",
+                        params={"token_id": token_id},
+                        timeout=4,
+                    )
+                    if r.status_code == 200:
+                        return float(r.json().get("mid", 0))
+                except Exception:
+                    pass
+                return 0.0
+
+            def calc_upnl(p, current_price: float) -> float:
+                """Unrealised P&L по текущей цене."""
+                if current_price <= 0 or p.entry_price <= 0:
+                    return 0.0
+                entry = p.entry_price if p.direction == "YES" else 1 - p.entry_price
+                cur   = current_price if p.direction == "YES" else 1 - current_price
+                return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
+
+            def polymarket_url(market_id: str) -> str:
+                """Ссылка на рынок на Polymarket."""
+                if market_id:
+                    return f"https://polymarket.com/event/{market_id}"
+                return "https://polymarket.com"
+
+            def fmt(p, fetch_price: bool = False):
+                current_price = get_current_price(p.token_id) if fetch_price and p.token_id else 0.0
+                upnl = calc_upnl(p, current_price) if fetch_price else (p.pnl or 0)
                 return {
-                    "id": p.market_id, "question": p.question,
-                    "direction": p.direction, "price": p.entry_price,
-                    "size": p.size_usd, "pnl": p.pnl or 0,
-                    "age": "now", "tags": p.tags,
-                    "status": p.status, "type": p.signal_type,
+                    "id":           p.market_id,
+                    "question":     p.question,
+                    "direction":    p.direction,
+                    "price":        p.entry_price,
+                    "current_price": current_price,
+                    "size":         p.size_usd,
+                    "pnl":          upnl,
+                    "age":          "now",
+                    "tags":         p.tags,
+                    "status":       p.status,
+                    "type":         p.signal_type,
+                    "url":          polymarket_url(p.market_id),
+                    "token_id":     p.token_id or "",
                 }
+
+            # Считаем unrealised P&L для открытых позиций
+            open_formatted  = [fmt(p, fetch_price=True)  for p in open_pos]
+            closed_formatted = [fmt(p, fetch_price=False) for p in closed]
+
+            # Суммарный unrealised P&L
+            total_upnl = sum(p["pnl"] for p in open_formatted)
+
+            # Smart money leaderboard
+            sm_traders = []
+            for addr, profile in list(self.sm.known_wallets.items())[:10]:
+                if profile.trader_class.value == "noise":
+                    continue
+                sm_traders.append({
+                    "addr":    addr[:6] + "…" + addr[-4:] if len(addr) > 10 else addr,
+                    "class":   profile.trader_class.value.capitalize(),
+                    "wr":      round(profile.win_rate, 3),
+                    "roi":     round(profile.roi, 3),
+                    "trades":  profile.resolved_trades,
+                    "vol":     round(profile.total_volume, 0),
+                    "score":   round(profile.insider_score if profile.trader_class.value == "insider" else profile.sharp_score, 3),
+                    "domains": profile.specializations,
+                })
+
+            # Learning stats
+            learning_stats = self.learning.stats()
 
             payload = {
                 "overview": {
@@ -317,6 +407,7 @@ class Prometheus:
                     "dry_run":           cfg.dry_run,
                     "pnl_today":         snap["daily_pnl"],
                     "pnl_total":         snap["total_pnl"],
+                    "unrealised_pnl":    round(total_upnl, 2),
                     "win_rate":          snap["win_rate"],
                     "total_trades":      snap["total_trades"],
                     "open_positions":    snap["open_positions"],
@@ -327,8 +418,16 @@ class Prometheus:
                     "smart_money_today": self._daily_sm_alerts,
                 },
                 "positions": {
-                    "open":         [fmt(p) for p in open_pos],
-                    "closed_today": [fmt(p) for p in closed],
+                    "open":         open_formatted,
+                    "closed_today": closed_formatted,
+                },
+                "signals": list(reversed(self._signal_history)),
+                "smart_money": {
+                    "traders":       sm_traders,
+                    "total_tracked": len(self.sm.known_wallets),
+                },
+                "learning": {
+                    "signal_stats": learning_stats,
                 },
             }
 
@@ -336,9 +435,9 @@ class Prometheus:
                 f"{api_url}/internal/push",
                 json=payload,
                 headers={"x-bot-key": cfg.dashboard_key},
-                timeout=5,
+                timeout=8,
             )
-            log.info("📤 Данные отправлены в API")
+            log.info(f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f}")
         except Exception as e:
             log.debug(f"Push to API failed: {e}")
 
