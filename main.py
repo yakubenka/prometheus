@@ -21,6 +21,7 @@ from resolver import PositionResolver
 from learning import LearningEngine
 from intel import IntelPipeline
 from intel_ext import ExtendedIntelPipeline
+from screener import screen
 
 import logging
 log = logging.getLogger("prometheus.main")
@@ -242,21 +243,30 @@ class Prometheus:
                                list(sig.wallet.specializations), "smart_money")
                 sm_trades += 1
 
-        # 2. AI Ensemble
-        markets = fetch_markets(limit=cfg.max_markets,
-                                min_volume_24h=cfg.min_volume)
-        self._daily_signals += len(markets)
-        log.info(f"Рынков для анализа: {len(markets)}")
+        # 2. Двухэтапный анализ рынков
+        # Этап 1: быстрый скрининг 50 рынков без AI
+        all_markets = fetch_markets(
+            limit          = 50,   # смотрим широко
+            min_volume_24h = cfg.min_volume,
+        )
+        self._daily_signals += len(all_markets)
+        log.info(f"Рынков загружено: {len(all_markets)} (из 50)")
 
-        for market in markets:
+        # Этап 2: полный AI анализ только топ-10 кандидатов
+        candidates = screen(all_markets, top_n=cfg.max_markets)
+        log.info(f"После скрининга: {len(candidates)} кандидатов для AI")
+
+        for cand in candidates:
+            market = cand.market
             if not self.risk.snapshot()["can_trade"]:
                 break
 
             result: EnsembleResult = self.signals.analyze(market)
             log.info(
                 f"  {market.question[:55]}\n"
-                f"  → {result.direction} edge={result.edge:.2%} "
-                f"prob={result.ai_probability:.2%} conf={result.confidence}"
+                f"  pre={cand.pre_score:.2f} → {result.direction} "
+                f"edge={result.edge:.2%} prob={result.ai_probability:.2%} "
+                f"conf={result.confidence} | {cand.reason}"
             )
 
             # Записываем сигнал в историю
@@ -269,11 +279,11 @@ class Prometheus:
                 "edge":       round(result.edge, 4),
                 "confidence": result.confidence,
                 "prob":       round(result.ai_probability, 3),
-                "detail":     result.reasoning[:150],
+                "detail":     f"{result.reasoning[:120]} | Pre-score: {cand.pre_score:.2f} ({cand.reason})",
                 "url":        f"https://polymarket.com/markets?_s={market.question[:50].replace(' ', '%20')}",
                 "traded":     False,
+                "pre_score":  cand.pre_score,
             })
-            # Держим только последние 50
             self._signal_history = self._signal_history[-50:]
 
             if result.direction == "NEUTRAL":       continue
