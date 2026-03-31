@@ -1,13 +1,14 @@
 """
 Prometheus v3 — Risk Manager
 Защита капитала. Никакой сделки без прохождения всех проверок.
-Audit log каждого решения.
+Audit log каждого решения. PostgreSQL persistence.
 """
 
 from __future__ import annotations
 import json
 import logging
 import hashlib
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timezone
 from pathlib import Path
@@ -83,6 +84,7 @@ class RiskManager:
 
         self._positions: list[Position] = []
         self._audit_log: list[dict]     = []
+        self._db_init()
         self._load()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -281,21 +283,88 @@ class RiskManager:
         except Exception as e:
             log.error(f"Audit log write failed: {e}")
 
+    def _db_conn(self):
+        """PostgreSQL соединение если доступно."""
+        db_url = os.environ.get("DATABASE_URL","")
+        if not db_url:
+            return None
+        try:
+            import psycopg2
+            if db_url.startswith("postgres://"):
+                db_url = db_url.replace("postgres://","postgresql://",1)
+            return psycopg2.connect(db_url)
+        except Exception:
+            return None
+
+    def _db_init(self):
+        """Создать таблицу позиций если не существует."""
+        conn = self._db_conn()
+        if not conn:
+            return
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS positions (
+                    market_id   TEXT PRIMARY KEY,
+                    data        TEXT NOT NULL,
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.commit(); cur.close(); conn.close()
+        except Exception as e:
+            log.debug(f"DB init positions: {e}")
+
     def _save(self):
+        # Сохраняем в файл
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             data = [asdict(p) for p in self._positions]
             (self._dir / "positions.json").write_text(json.dumps(data, indent=2))
         except Exception as e:
-            log.error(f"Positions save failed: {e}")
+            log.error(f"Positions file save failed: {e}")
+
+        # Сохраняем в PostgreSQL
+        conn = self._db_conn()
+        if not conn:
+            return
+        try:
+            cur = conn.cursor()
+            for p in self._positions:
+                cur.execute("""
+                    INSERT INTO positions (market_id, data, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (market_id) DO UPDATE
+                    SET data = EXCLUDED.data, updated_at = NOW()
+                """, (p.market_id, json.dumps(asdict(p))))
+            conn.commit(); cur.close(); conn.close()
+        except Exception as e:
+            log.debug(f"DB save positions: {e}")
 
     def _load(self):
+        # Сначала пробуем PostgreSQL
+        conn = self._db_conn()
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT data FROM positions ORDER BY updated_at DESC")
+                rows = cur.fetchall()
+                cur.close(); conn.close()
+                if rows:
+                    for row in rows:
+                        d = json.loads(row[0])
+                        self._positions.append(Position(**d))
+                    log.info(f"Загружено {len(self._positions)} позиций из PostgreSQL")
+                    return
+            except Exception as e:
+                log.debug(f"DB load positions: {e}")
+
+        # Fallback — файл
         try:
             path = self._dir / "positions.json"
             if not path.exists():
                 return
             for d in json.loads(path.read_text()):
                 self._positions.append(Position(**d))
-            log.info(f"Загружено {len(self._positions)} позиций")
+            log.info(f"Загружено {len(self._positions)} позиций из файла")
         except Exception as e:
             log.error(f"Positions load failed: {e}")
