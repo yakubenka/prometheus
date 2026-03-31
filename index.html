@@ -164,6 +164,8 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
     <div class="card" id="pos-open"><div class="empty">No open positions</div></div>
     <div class="sec" id="closed-title" style="display:none">CLOSED TODAY</div>
     <div class="card" id="pos-closed" style="display:none"></div>
+    <div class="sec" id="history-title" style="display:none">ALL HISTORY</div>
+    <div class="card" id="pos-history" style="display:none"></div>
   </div>
 
   <!-- SMART MONEY -->
@@ -360,6 +362,31 @@ async function loadPositions(){
       $('closed-title').style.display='block';$('pos-closed').style.display='block';
       $('pos-closed').innerHTML=closed.map(p=>fmtPos(p,false)).join('');
     }else{$('closed-title').style.display='none';$('pos-closed').style.display='none';}
+
+    // Полная история
+    const history=d.history||[];
+    if(history.length){
+      $('history-title').style.display='block';
+      $('history-title').textContent=history.length+' TOTAL TRADES';
+      $('pos-history').style.display='block';
+      $('pos-history').innerHTML=history.map(p=>{
+        const up=(+p.pnl||0)>=0;
+        const date=p.closed_at?(p.closed_at||'').substring(0,10):'';
+        return `<div class="pos-item" onclick="window.open('${p.url||'https://polymarket.com'}','_blank')">
+          <div class="pos-top">
+            <div class="pos-left">
+              <div class="sig-badges">${badge(p.direction||'—')}${(p.tags||[]).slice(0,1).map(badge).join('')}<span style="font-size:10px;color:rgba(255,255,255,.3)">${date}</span></div>
+              <div class="pos-q">${p.question||''}</div>
+              <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)}</div>
+            </div>
+            <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }else{
+      $('history-title').style.display='none';
+      $('pos-history').style.display='none';
+    }
     // Mini list on overview
     if(open.length){
       $('ov-pos-title').style.display='block';$('ov-pos-list').style.display='block';

@@ -333,8 +333,10 @@ class Prometheus:
             import requests as _r
             snap     = self.risk.snapshot()
             open_pos = self.risk.open_positions
-            closed   = [p for p in self.risk.closed_positions
-                        if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()]
+            # Все закрытые — для полной истории
+            all_closed = self.risk.closed_positions
+            closed_today = [p for p in all_closed
+                           if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()]
 
             def get_current_price(token_id: str) -> float:
                 """Текущая цена токена с Polymarket CLOB."""
@@ -388,8 +390,9 @@ class Prometheus:
                 }
 
             # Считаем unrealised P&L для открытых позиций
-            open_formatted  = [fmt(p, fetch_price=True)  for p in open_pos]
-            closed_formatted = [fmt(p, fetch_price=False) for p in closed]
+            open_formatted   = [fmt(p, fetch_price=True)  for p in open_pos]
+            closed_formatted = [fmt(p, fetch_price=False) for p in closed_today]
+            all_closed_fmt   = [fmt(p, fetch_price=False) for p in all_closed[-100:]]
 
             # Суммарный unrealised P&L
             total_upnl = sum(p["pnl"] for p in open_formatted)
@@ -432,6 +435,7 @@ class Prometheus:
                 "positions": {
                     "open":         open_formatted,
                     "closed_today": closed_formatted,
+                    "history":      all_closed_fmt,
                 },
                 "signals": list(reversed(self._signal_history)),
                 "smart_money": {
