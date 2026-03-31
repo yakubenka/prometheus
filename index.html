@@ -12,7 +12,7 @@
 body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;max-width:430px;margin:0 auto;min-height:100vh}
 ::-webkit-scrollbar{display:none}
 .statusbar{display:flex;justify-content:space-between;align-items:center;padding:14px 20px 0;font-size:13px;font-weight:600}
-.statusbar .mid{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:.08em}
+.mid{font-size:11px;color:rgba(255,255,255,.4);letter-spacing:.08em}
 .live-wrap{display:flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,.5)}
 .live-dot{position:relative;width:8px;height:8px;flex-shrink:0}
 .live-dot .ring{position:absolute;inset:0;border-radius:50%;opacity:.35;animation:ping 2s ease-out infinite}
@@ -60,6 +60,13 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
 .pos-meta{font-size:11px;color:rgba(255,255,255,.4);margin-top:4px}
 .pos-link{font-size:11px;color:#0a84ff;margin-top:3px}
 .pos-pnl{font-size:20px;font-weight:700;flex-shrink:0}
+.hist-item{padding:13px 18px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer}
+.hist-item:last-child{border-bottom:none}
+.hist-top{display:flex;justify-content:space-between;align-items:flex-start}
+.hist-left{flex:1;min-width:0;padding-right:10px}
+.hist-q{font-size:14px;font-weight:500;line-height:1.35}
+.hist-meta{font-size:11px;color:rgba(255,255,255,.4);margin-top:4px}
+.hist-pnl{font-size:20px;font-weight:700;flex-shrink:0}
 .sm-item{padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06)}
 .sm-item:last-child{border-bottom:none}
 .sm-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
@@ -69,14 +76,12 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
 .sm-stat .ssv{font-size:15px;font-weight:600}
 .learn-item{padding:13px 18px;border-bottom:1px solid rgba(255,255,255,.06)}
 .learn-item:last-child{border-bottom:none}
-.learn-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
-.learn-bar{height:3px;background:#2c2c2e;border-radius:2px;overflow:hidden}
-.learn-fill{height:100%;border-radius:2px;transition:width .8s ease}
-.empty{padding:32px 20px;text-align:center;font-size:13px;color:rgba(255,255,255,.25)}
+.empty{padding:32px 20px;text-align:center;font-size:13px;color:rgba(255,255,255,.25);line-height:1.7}
 .tabbar{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:rgba(0,0,0,.92);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-top:1px solid rgba(255,255,255,.1);display:flex;padding-bottom:env(safe-area-inset-bottom,8px)}
 .tab{flex:1;border:none;background:none;cursor:pointer;padding:9px 0 4px;display:flex;flex-direction:column;align-items:center;gap:3px}
 .screen{display:none}
 .screen.active{display:block}
+.win-badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;margin-left:6px}
 </style>
 </head>
 <body>
@@ -96,9 +101,9 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
   <div id="s-overview" class="screen active">
     <div class="hero">
       <div class="lbl">CURRENT BALANCE</div>
-      <div class="big" id="pnl-today">+$0.00</div>
-      <div class="upnl" id="upnl-ov"></div>
-      <div class="sub" id="pnl-all">All time +$0.00</div>
+      <div class="big" id="balance">$100.00</div>
+      <div class="upnl" id="balance-change"></div>
+      <div class="sub" id="balance-sub"></div>
     </div>
 
     <div class="card">
@@ -138,19 +143,18 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
     <div class="card">
       <div class="row"><span style="font-size:15px">Signals today</span><span style="font-size:15px;font-weight:600" id="sig-today">0</span></div>
       <div class="row"><span style="font-size:15px">Smart money alerts</span><span style="font-size:15px;font-weight:600;color:#ffd60a" id="sm-today">0</span></div>
-      <div class="row"><span style="font-size:15px">Bankroll</span><span style="font-size:15px;font-weight:600" id="bankroll">$100</span></div>
+      <div class="row"><span style="font-size:15px">Free capital</span><span style="font-size:15px;font-weight:600;color:#30d158" id="free-cap">$100</span></div>
       <div class="row"><span style="font-size:15px">Open exposure</span><span style="font-size:15px;font-weight:600" id="exposure">$0.00</span></div>
-      <div class="row"><span style="font-size:15px">Free capital</span><span style="font-size:15px;font-weight:600;color:#30d158" id="free-cap">$100.00</span></div>
     </div>
   </div>
 
   <!-- SIGNALS -->
   <div id="s-signals" class="screen">
-    <div style="padding:24px 20px 12px;display:flex;justify-content:space-between;align-items:flex-end">
+    <div style="padding:24px 20px 8px;display:flex;justify-content:space-between;align-items:flex-end">
       <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">Signals</div>
       <span style="font-size:12px;color:rgba(255,255,255,.4)" id="sig-count">0 analyzed</span>
     </div>
-    <div style="padding:0 20px 12px;font-size:12px;color:rgba(255,255,255,.35)">Tap any signal to see AI reasoning. Green = traded.</div>
+    <div style="padding:0 20px 12px;font-size:12px;color:rgba(255,255,255,.35)">Tap to see AI reasoning. Green = traded.</div>
     <div class="card" id="sig-list"><div class="empty">Waiting for next cycle…</div></div>
   </div>
 
@@ -159,50 +163,59 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
     <div style="text-align:center;padding:24px 0 14px">
       <div style="font-size:11px;color:rgba(255,255,255,.4);letter-spacing:.1em;margin-bottom:6px">UNREALISED P&L</div>
       <div style="font-size:44px;font-weight:700;letter-spacing:-.03em" id="upnl-big">+$0.00</div>
-      <div style="font-size:12px;color:rgba(255,255,255,.35);margin-top:6px">Tap position to open on Polymarket</div>
+      <div style="font-size:12px;color:rgba(255,255,255,.35);margin-top:6px">Tap to open on Polymarket</div>
     </div>
     <div class="sec" id="open-title">0 OPEN</div>
     <div class="card" id="pos-open"><div class="empty">No open positions</div></div>
-    <div class="sec" id="closed-title" style="display:none">CLOSED TODAY</div>
-    <div class="card" id="pos-closed" style="display:none"></div>
-    <div class="sec" id="history-title" style="display:none">ALL HISTORY</div>
-    <div class="card" id="pos-history" style="display:none"></div>
+  </div>
+
+  <!-- HISTORY -->
+  <div id="s-history" class="screen">
+    <div style="padding:24px 20px 8px;display:flex;justify-content:space-between;align-items:flex-end">
+      <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">History</div>
+      <span style="font-size:12px;color:rgba(255,255,255,.4)" id="hist-count">0 trades</span>
+    </div>
+
+    <!-- P&L Summary -->
+    <div class="card" id="hist-summary" style="display:none">
+      <div class="stats">
+        <div class="stat"><div class="sl">TOTAL P&L</div><div class="sv" id="hist-total-pnl">$0</div></div>
+        <div class="stat"><div class="sl">WIN RATE</div><div class="sv" id="hist-wr">0%</div></div>
+        <div class="stat"><div class="sl">TRADES</div><div class="sv" id="hist-n">0</div></div>
+      </div>
+    </div>
+
+    <div class="card" id="hist-list"><div class="empty">No closed trades yet.<br><br>History appears here when markets resolve.</div></div>
   </div>
 
   <!-- SMART MONEY -->
   <div id="s-smart" class="screen">
     <div style="padding:24px 20px 4px">
       <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">Smart Money</div>
-      <div style="font-size:14px;color:rgba(255,255,255,.4);margin-top:3px" id="sm-tracked">Scanning wallets…</div>
+      <div style="font-size:14px;color:rgba(255,255,255,.4);margin-top:3px" id="sm-tracked">Scanning…</div>
     </div>
-    <div class="sec">LEADERBOARD</div>
-    <div class="card" id="sm-list"><div class="empty">Bot scans 100+ large trades per cycle.<br><br>Wallets with high win rates appear here.</div></div>
-    <div class="sec">TRADER TYPES</div>
-    <div class="card">
-      <div class="row"><span style="font-size:13px">🔴 Insider</span><span style="font-size:12px;color:rgba(255,255,255,.4)">Win rate >80%, geo/politics</span></div>
-      <div class="row"><span style="font-size:13px">🟡 Sharp</span><span style="font-size:12px;color:rgba(255,255,255,.4)">ROI >20%, well-calibrated</span></div>
-      <div class="row"><span style="font-size:13px">🔵 Contrarian</span><span style="font-size:12px;color:rgba(255,255,255,.4)">Bets against crowd, wins</span></div>
-    </div>
-  </div>
 
-  <!-- LEARNING -->
-  <div id="s-learning" class="screen">
-    <div style="padding:24px 20px 4px">
-      <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">Learning</div>
-      <div style="font-size:14px;color:rgba(255,255,255,.4);margin-top:3px">Signal accuracy over resolved trades</div>
-    </div>
-    <div class="sec">SIGNAL ACCURACY</div>
-    <div class="card" id="learn-list"><div class="empty">Accumulating data from resolved markets…</div></div>
-    <div class="sec">HOW IT WORKS</div>
-    <div class="card">
-      <div style="padding:14px 18px;font-size:13px;color:rgba(255,255,255,.45);line-height:1.7">
-        Each signal starts equal. As markets resolve, Prometheus tracks which signals predicted correctly. Accurate signals earn more weight in the ensemble. The system learns from every trade.
+    <div class="sec">LEADERBOARD</div>
+    <div class="card" id="sm-list">
+      <div style="padding:20px 18px">
+        <div style="font-size:14px;color:rgba(255,255,255,.6);margin-bottom:12px">🔍 Scanning on-chain trades…</div>
+        <div style="font-size:12px;color:rgba(255,255,255,.35);line-height:1.8">
+          Bot tracks 100+ large trades (>$3k) per cycle.<br>
+          Wallets need 10+ resolved trades to be classified.<br><br>
+          <span style="color:rgba(255,69,58,.8)">● Insider</span> — win rate >80% on geo/politics<br>
+          <span style="color:rgba(255,214,10,.8)">● Sharp</span> — ROI >20%, well-calibrated<br>
+          <span style="color:rgba(10,132,255,.8)">● Contrarian</span> — bets against crowd, wins
+        </div>
       </div>
     </div>
+
+    <div class="sec">SIGNAL ACCURACY</div>
+    <div class="card" id="learn-list"><div class="empty">Accumulating data…</div></div>
   </div>
 
 </div>
 
+<!-- Tab bar -->
 <div class="tabbar">
   <button class="tab" onclick="go('overview')" id="t-overview">
     <span style="font-size:21px;color:#0a84ff">⊙</span>
@@ -216,13 +229,13 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
     <span style="font-size:21px;color:rgba(255,255,255,.3)">⊞</span>
     <span style="font-size:9px;color:rgba(255,255,255,.3)">Positions</span>
   </button>
+  <button class="tab" onclick="go('history')" id="t-history">
+    <span style="font-size:21px;color:rgba(255,255,255,.3)">◷</span>
+    <span style="font-size:9px;color:rgba(255,255,255,.3)">History</span>
+  </button>
   <button class="tab" onclick="go('smart')" id="t-smart">
     <span style="font-size:21px;color:rgba(255,255,255,.3)">◈</span>
     <span style="font-size:9px;color:rgba(255,255,255,.3)">Smart $</span>
-  </button>
-  <button class="tab" onclick="go('learning')" id="t-learning">
-    <span style="font-size:21px;color:rgba(255,255,255,.3)">◉</span>
-    <span style="font-size:9px;color:rgba(255,255,255,.3)">Learning</span>
   </button>
 </div>
 
@@ -231,14 +244,14 @@ const API='https://distinguished-wisdom-production-def2.up.railway.app';
 const POLL=10000;
 const $=id=>document.getElementById(id);
 const usd=n=>'$'+Math.abs(+n||0).toFixed(2);
-const sign=n=>((+n||0)>=0?'+':'−')+usd(n);
+const sign=n=>((+n||0)>=0?'+':'-')+'$'+Math.abs(+n||0).toFixed(2);
 const pct=n=>((+n||0)*100).toFixed(1)+'%';
 
 function badge(l){
   const c={YES:'#30d158',NO:'#ff453a','—':'rgba(255,255,255,.25)',
     Insider:'#ff453a',Sharp:'#ffd60a',Contrarian:'#0a84ff',
     macro:'#0a84ff',crypto:'#ff9f0a',politics:'#ffd60a',
-    geopolitics:'#ff453a',sports:'#bf5af2',
+    geopolitics:'#ff453a',sports:'#bf5af2',tech:'#5e5ce6',
     smart_money:'#ffd60a',ensemble:'#0a84ff',NEUTRAL:'#3a3a3c'};
   const col=c[l]||'rgba(255,255,255,.35)';
   const txt=l==='smart_money'?'Smart $':l==='ensemble'?'AI':l;
@@ -257,12 +270,11 @@ tick();setInterval(tick,1000);
 function go(name){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   $('s-'+name).classList.add('active');
-  ['overview','signals','positions','smart','learning'].forEach(n=>{
+  ['overview','signals','positions','history','smart'].forEach(n=>{
     const on=n===name;
     const t=$('t-'+n);
     if(!t)return;
-    const spans=t.querySelectorAll('span');
-    spans.forEach(s=>s.style.color=on?'#0a84ff':'rgba(255,255,255,.3)');
+    t.querySelectorAll('span').forEach(s=>s.style.color=on?'#0a84ff':'rgba(255,255,255,.3)');
   });
 }
 
@@ -272,31 +284,29 @@ async function api(path){
   return r.json();
 }
 
+// ── Overview ───────────────────────────────────────────────────────────
 async function loadOverview(){
   try{
     const d=await api('/api/overview');
     setLive(true);
-    const up=(d.pnl_today||0)>=0;
-    const realised   = d.pnl_today   || 0;
-    const unrealised = d.unrealised_pnl || 0;
-    const combined   = realised + unrealised;
-    const bankroll   = d.bankroll || 100;
-    const totalPnl   = d.pnl_total || 0;
 
-    // Текущий баланс = стартовый + все закрытые P&L + unrealised
-    const currentBalance = bankroll + totalPnl + unrealised;
+    const bankroll   = d.bankroll||100;
+    const totalPnl   = d.pnl_total||0;
+    const unrealised = d.unrealised_pnl||0;
+    const currentBal = bankroll + totalPnl + unrealised;
+    const change     = currentBal - bankroll;
+    const changePct  = ((change/bankroll)*100).toFixed(1);
 
-    $('pnl-today').textContent = '$' + currentBalance.toFixed(2);
-    $('pnl-today').style.color = currentBalance >= bankroll ? '#30d158' : '#ff453a';
+    $('balance').textContent='$'+currentBal.toFixed(2);
+    $('balance').style.color=currentBal>=bankroll?'#30d158':'#ff453a';
+    $('balance-change').textContent=(change>=0?'+':'')+change.toFixed(2)+' ('+changePct+'%)';
+    $('balance-change').style.color=change>=0?'#30d158':'#ff453a';
 
-    // Изменение от старта
-    const change = currentBalance - bankroll;
-    const changePct = ((change / bankroll) * 100).toFixed(1);
-    $('upnl-ov').textContent = (change >= 0 ? '+' : '') + '$' + change.toFixed(2) + ' (' + changePct + '%) from $' + bankroll;
-    $('upnl-ov').style.color = change >= 0 ? '#30d158' : '#ff453a';
+    const today=d.pnl_today||0;
+    const todayStr=(today>=0?'+':'')+today.toFixed(2)+' today';
+    const unrStr=unrealised!==0?(' · '+(unrealised>=0?'+':'')+unrealised.toFixed(2)+' open'):'';
+    $('balance-sub').textContent=todayStr+unrStr;
 
-    $('pnl-all').textContent = 'Today: ' + (combined >= 0 ? '+' : '') + '$' + combined.toFixed(2) +
-                               (unrealised !== 0 ? ' (incl. $' + unrealised.toFixed(2) + ' open)' : '');
     const bc=d.bot_running?'#30d158':'#ff453a';
     $('bring').style.background=bc;$('bcore').style.background=bc;
     $('bot-st').textContent=d.bot_running?'Running':'Stopped';
@@ -305,12 +315,10 @@ async function loadOverview(){
     $('open-n').textContent=d.open_positions||0;
     $('sig-today').textContent=d.signals_today||0;
     $('sm-today').textContent=d.smart_money_today||0;
-    $('bankroll').textContent='$'+(d.bankroll||100);
     $('exposure').textContent=usd(d.open_exposure||0);
-    const freeCap = (d.bankroll||100) - (d.open_exposure||0);
-    $('free-cap').textContent = '$' + Math.max(0, freeCap).toFixed(2);
-    $('free-cap').style.color = freeCap > 20 ? '#30d158' : freeCap > 5 ? '#ff9f0a' : '#ff453a';
+    $('free-cap').textContent='$'+(Math.max(0,bankroll-(d.open_exposure||0))).toFixed(2);
     $('upd-time').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+
     const lp=d.daily_loss_used||0;
     $('loss-pct').textContent=(lp*100).toFixed(1)+'%';
     $('loss-bar').style.width=(lp*100)+'%';
@@ -318,14 +326,15 @@ async function loadOverview(){
   }catch{setLive(false);}
 }
 
+// ── Signals ────────────────────────────────────────────────────────────
 async function loadSignals(){
   try{
     const d=await api('/api/signals');
     const list=d.signals||[];
     $('sig-count').textContent=list.length+' analyzed';
-    if(!list.length){$('sig-list').innerHTML='<div class="empty">Waiting for next cycle…<br><br>Bot analyzes markets every 5 minutes.</div>';return;}
+    if(!list.length){$('sig-list').innerHTML='<div class="empty">Waiting for next cycle…<br>Bot analyzes markets every 5 min.</div>';return;}
     $('sig-list').innerHTML=list.map((s,i)=>{
-      const skip=s.direction==='NEUTRAL'||s.direction==='—'||!s.direction;
+      const skip=!s.direction||s.direction==='NEUTRAL'||s.direction==='—';
       return `<div class="sig-item" onclick="toggleSig(${i})">
         <div class="sig-top">
           <div class="sig-left">
@@ -335,7 +344,7 @@ async function loadSignals(){
               ${s.traded?`<span class="badge" style="color:#30d158;background:#30d15818;border:1px solid #30d15828">✓ Traded</span>`:''}
             </div>
             <div class="sig-q${skip?' skip':''}">${s.question||''}</div>
-            ${s.edge?`<div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:3px">Edge ${(s.edge*100).toFixed(1)}% · ${(s.prob*100).toFixed(0)}% probability</div>`:''}
+            ${s.edge?`<div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:3px">Edge ${(s.edge*100).toFixed(1)}% · ${(s.prob*100).toFixed(0)}% prob</div>`:''}
           </div>
           <div class="sig-right">
             ${s.traded&&s.size?`<div class="sig-size">$${(+s.size).toFixed(2)}</div>`:'<div style="font-size:12px;color:rgba(255,255,255,.2)">skip</div>'}
@@ -347,165 +356,163 @@ async function loadSignals(){
     }).join('');
   }catch{}
 }
-
 function toggleSig(i){const d=$('sd'+i);if(d)d.style.display=d.style.display==='block'?'none':'block';}
 
-function fmtPos(p,link=true){
-  const up=(+p.pnl||0)>=0;
-  const url=p.url||`https://polymarket.com/event/${p.id}`;
-  const cur=p.current_price&&(+p.current_price)>0?`now ${(+p.current_price).toFixed(3)}`:'';
-  return `<div class="pos-item" onclick="window.open('${url}','_blank')">
-    <div class="pos-top">
-      <div class="pos-left">
-        <div class="sig-badges">${badge(p.direction||'—')}${(p.tags||[]).slice(0,2).map(badge).join('')}</div>
-        <div class="pos-q">${p.question||''}</div>
-        <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ entry ${(+p.price||0).toFixed(3)}${cur?' · '+cur:''}</div>
-        ${link?'<div class="pos-link">↗ Open on Polymarket</div>':''}
-      </div>
-      <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
-    </div>
-  </div>`;
-}
-
+// ── Positions ──────────────────────────────────────────────────────────
 async function loadPositions(){
   try{
     const d=await api('/api/positions');
-    const open=d.open||[],closed=d.closed_today||[];
+    const open=d.open||[];
     const upnl=open.reduce((s,p)=>s+(+p.pnl||0),0);
     $('upnl-big').textContent=sign(upnl);
     $('upnl-big').style.color=upnl>=0?'#30d158':'#ff453a';
     $('open-title').textContent=open.length+' OPEN';
-    $('pos-open').innerHTML=open.length?open.map(p=>fmtPos(p)).join(''):'<div class="empty">No open positions</div>';
-    if(closed.length){
-      $('closed-title').style.display='block';$('pos-closed').style.display='block';
-      $('pos-closed').innerHTML=closed.map(p=>fmtPos(p,false)).join('');
-    }else{$('closed-title').style.display='none';$('pos-closed').style.display='none';}
 
-    // Полная история
-    const history=d.history||[];
-    if(history.length){
-      $('history-title').style.display='block';
-      $('history-title').textContent=history.length+' TOTAL TRADES';
-      $('pos-history').style.display='block';
-      $('pos-history').innerHTML=history.map(p=>{
-        const up=(+p.pnl||0)>=0;
-        const date=p.closed_at?(p.closed_at||'').substring(0,10):'';
-        return `<div class="pos-item" onclick="window.open('${p.url||'https://polymarket.com'}','_blank')">
-          <div class="pos-top">
-            <div class="pos-left">
-              <div class="sig-badges">${badge(p.direction||'—')}${(p.tags||[]).slice(0,1).map(badge).join('')}<span style="font-size:10px;color:rgba(255,255,255,.3)">${date}</span></div>
-              <div class="pos-q">${p.question||''}</div>
-              <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)}</div>
-            </div>
-            <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
+    function fmtPos(p){
+      const up=(+p.pnl||0)>=0;
+      const url=p.url||'https://polymarket.com';
+      const cur=p.current_price&&(+p.current_price)>0&&(+p.current_price)!=(+p.price)?` · now ${(+p.current_price).toFixed(3)}`:'';
+      return `<div class="pos-item" onclick="window.open('${url}','_blank')">
+        <div class="pos-top">
+          <div class="pos-left">
+            <div class="sig-badges">${badge(p.direction||'—')}${(p.tags||[]).slice(0,2).map(badge).join('')}</div>
+            <div class="pos-q">${p.question||''}</div>
+            <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)}${cur}</div>
+            <div class="pos-link">↗ Open on Polymarket</div>
           </div>
-        </div>`;
-      }).join('');
-    }else{
-      $('history-title').style.display='none';
-      $('pos-history').style.display='none';
+          <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
+        </div>
+      </div>`;
     }
+
+    $('pos-open').innerHTML=open.length?open.map(fmtPos).join(''):'<div class="empty">No open positions</div>';
+
     // Mini list on overview
     if(open.length){
       $('ov-pos-title').style.display='block';$('ov-pos-list').style.display='block';
       $('ov-pos-list').innerHTML=open.map(p=>{
         const up=(+p.pnl||0)>=0;
         return `<div class="row" onclick="go('positions')" style="cursor:pointer">
-          <span style="font-size:13px;max-width:220px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;display:flex;align-items:center;gap:6px">${badge(p.direction||'—')}<span>${(p.question||'').substring(0,40)}…</span></span>
-          <span style="font-weight:600;color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</span>
+          <div style="flex:1;min-width:0;padding-right:10px">
+            <div style="display:flex;gap:5px;margin-bottom:3px">${badge(p.direction||'—')}</div>
+            <div style="font-size:13px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${p.question||''}</div>
+          </div>
+          <span style="font-weight:600;font-size:15px;color:${up?'#30d158':'#ff453a'};flex-shrink:0">${sign(p.pnl||0)}</span>
+        </div>`;
+      }).join('');
+    } else {
+      $('ov-pos-title').style.display='none';$('ov-pos-list').style.display='none';
+    }
+  }catch{}
+}
+
+// ── History ────────────────────────────────────────────────────────────
+async function loadHistory(){
+  try{
+    const d=await api('/api/positions');
+    const history=d.history||[];
+    $('hist-count').textContent=history.length+' trades';
+
+    if(!history.length){
+      $('hist-summary').style.display='none';
+      $('hist-list').innerHTML='<div class="empty">No closed trades yet.<br><br>History appears when markets resolve.<br>Positions with price 0.99+ or 0.01- close automatically.</div>';
+      return;
+    }
+
+    // Summary stats
+    const wins=history.filter(p=>(+p.pnl||0)>0).length;
+    const totalPnl=history.reduce((s,p)=>s+(+p.pnl||0),0);
+    $('hist-summary').style.display='block';
+    $('hist-total-pnl').textContent=sign(totalPnl);
+    $('hist-total-pnl').style.color=totalPnl>=0?'#30d158':'#ff453a';
+    $('hist-wr').textContent=((wins/history.length)*100).toFixed(0)+'%';
+    $('hist-n').textContent=history.length;
+
+    // Trade list — newest first
+    $('hist-list').innerHTML=[...history].reverse().map(p=>{
+      const up=(+p.pnl||0)>=0;
+      const url=p.url||'https://polymarket.com';
+      const date=(p.closed_at||p.opened_at||'').substring(0,10);
+      const outcome=up?'WIN':'LOSS';
+      return `<div class="hist-item" onclick="window.open('${url}','_blank')">
+        <div class="hist-top">
+          <div class="hist-left">
+            <div class="sig-badges">
+              ${badge(p.direction||'—')}
+              <span class="win-badge" style="background:${up?'#30d15820':'#ff453a20'};color:${up?'#30d158':'#ff453a'}">${outcome}</span>
+              ${(p.tags||[]).slice(0,1).map(badge).join('')}
+              <span style="font-size:10px;color:rgba(255,255,255,.3)">${date}</span>
+            </div>
+            <div class="hist-q">${p.question||''}</div>
+            <div class="hist-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)}</div>
+          </div>
+          <div class="hist-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }catch{}
+}
+
+// ── Smart Money ────────────────────────────────────────────────────────
+async function loadSmart(){
+  try{
+    const d=await api('/api/smart_money');
+    const traders=d.traders||[];
+    const total=d.total_tracked||0;
+    $('sm-tracked').textContent=total>0?`${total} wallets tracked`:'Scanning on-chain trades every 5 min';
+
+    if(traders.length){
+      const cc={Insider:'#ff453a',Sharp:'#ffd60a',Contrarian:'#0a84ff'};
+      $('sm-list').innerHTML=traders.map((t,i)=>{
+        const col=cc[t.class]||'#8e8e93';
+        return `<div class="sm-item">
+          <div class="sm-top">
+            <span class="sm-rank" style="background:${col}">${i+1}</span>
+            <span style="font-size:12px;color:rgba(255,255,255,.5);font-family:monospace;flex:1">${t.addr||''}</span>
+            ${badge(t.class)}
+            <span style="font-size:18px;font-weight:700;color:${col}">${((t.score||0)*100).toFixed(0)}%</span>
+          </div>
+          <div class="sm-stats">
+            <div class="sm-stat"><div class="ssl">WIN RATE</div><div class="ssv">${((t.wr||0)*100).toFixed(0)}%</div></div>
+            <div class="sm-stat"><div class="ssl">ROI</div><div class="ssv" style="color:#30d158">+${((t.roi||0)*100).toFixed(0)}%</div></div>
+            <div class="sm-stat"><div class="ssl">TRADES</div><div class="ssv">${t.trades||0}</div></div>
+          </div>
         </div>`;
       }).join('');
     }
   }catch{}
 }
 
-async function loadSmart(){
-  try{
-    const d=await api('/api/smart_money');
-    const traders=d.traders||[];
-    const total=d.total_tracked||0;
-    const noise=d.total_noise||0;
-    const status=d.status||'scanning';
-
-    // Status line
-    if(total > 0){
-      $('sm-tracked').textContent=`${total} wallets tracked · ${noise} noise filtered`;
-    } else {
-      $('sm-tracked').textContent='Scanning on-chain trades every 5 min…';
-    }
-
-    if(!traders.length){
-      $('sm-list').innerHTML=`<div style="padding:20px 18px">
-        <div style="font-size:14px;color:rgba(255,255,255,.7);margin-bottom:12px">
-          ${status === 'scanning' ? '🔍 Scanning for smart money...' : '✅ No insiders detected yet'}
-        </div>
-        <div style="font-size:12px;color:rgba(255,255,255,.35);line-height:1.7">
-          Bot scans 100+ large trades (>$3,000) every cycle.<br><br>
-          Wallets need <strong style="color:rgba(255,255,255,.6)">10+ resolved trades</strong> to be classified.<br><br>
-          Insiders appear here when a wallet shows:<br>
-          • Win rate >80% on geopolitics/politics<br>
-          • Large bets on low-probability events<br>
-          • Consistent profit over time
-        </div>
-        ${total > 0 ? `<div style="margin-top:14px;font-size:12px;color:rgba(255,255,255,.4)">${total} wallets analyzed · ${noise} classified as noise</div>` : ''}
-      </div>`;
-      return;
-    }
-
-    const cc={Insider:'#ff453a',Sharp:'#ffd60a',Contrarian:'#0a84ff'};
-    $('sm-list').innerHTML=traders.map((t,i)=>{
-      const col=cc[t.class]||'#8e8e93';
-      return `<div class="sm-item">
-        <div class="sm-top">
-          <span class="sm-rank" style="background:${col}">${i+1}</span>
-          <span style="font-size:12px;color:rgba(255,255,255,.5);font-family:monospace;flex:1">${t.addr||''}</span>
-          ${badge(t.class)}
-          <span style="font-size:18px;font-weight:700;color:${col}">${((t.score||0)*100).toFixed(0)}%</span>
-        </div>
-        <div class="sm-stats">
-          <div class="sm-stat"><div class="ssl">WIN RATE</div><div class="ssv">${((t.wr||0)*100).toFixed(0)}%</div></div>
-          <div class="sm-stat"><div class="ssl">ROI</div><div class="ssv" style="color:#30d158">+${((t.roi||0)*100).toFixed(0)}%</div></div>
-          <div class="sm-stat"><div class="ssl">TRADES</div><div class="ssv">${t.trades||0}</div></div>
-          <div class="sm-stat"><div class="ssl">VOL</div><div class="ssv">$${Math.round((t.vol||0)/1000)}k</div></div>
-        </div>
-        ${(t.domains||[]).length?`<div style="padding-left:32px;margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">${t.domains.map(badge).join('')}</div>`:''}
-      </div>`;
-    }).join('');
-  }catch{}
-}
-
+// ── Learning ────────────────────────────────────────────────────────────
 async function loadLearning(){
   try{
     const d=await api('/api/learning');
     const stats=d.signal_stats||{};
     const names=['sentiment','momentum','calibration','consensus','base_rate'];
     const cols=['#0a84ff','#ff9f0a','#30d158','#ffd60a','#bf5af2'];
-    const hasData=Object.keys(stats).length>0;
-    if(!hasData){$('learn-list').innerHTML='<div class="empty">Accumulating data from resolved markets…<br><br>Signal accuracy will appear here after markets resolve.</div>';return;}
+    const hasData=Object.keys(stats).length>0&&Object.values(stats).some(s=>s&&s.total>0);
+    if(!hasData){$('learn-list').innerHTML='<div class="empty">Accumulating data…<br>Accuracy appears after markets resolve.</div>';return;}
     $('learn-list').innerHTML=names.map((name,i)=>{
       const s=stats[name];
       const acc=s?(s.accuracy||0):null;
       const col=cols[i];
       const barCol=acc===null?'#3a3a3c':acc>.6?'#30d158':acc>.5?'#ffd60a':'#ff453a';
       return `<div class="learn-item">
-        <div class="learn-hd">
-          <div>
-            <span style="font-size:14px;font-weight:500;text-transform:capitalize;color:${col}">${name}</span>
-            ${s?`<span style="font-size:11px;color:rgba(255,255,255,.35)"> · ${s.total||0} trades</span>`:''}
-          </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:14px;font-weight:500;text-transform:capitalize;color:${col}">${name}</span>
           <span style="font-size:16px;font-weight:700;color:${barCol}">${acc!==null?((acc*100).toFixed(0)+'%'):'—'}</span>
         </div>
-        <div class="learn-bar"><div class="learn-fill" style="width:${acc?acc*100:0}%;background:${col}"></div></div>
-        ${s&&s.avg_edge?`<div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:4px">Avg edge ${(s.avg_edge*100).toFixed(1)}%</div>`:''}
+        <div style="height:3px;background:#2c2c2e;border-radius:2px;overflow:hidden">
+          <div style="height:100%;border-radius:2px;width:${acc?acc*100:0}%;background:${col}"></div>
+        </div>
       </div>`;
     }).join('');
   }catch{}
 }
 
 async function refresh(){
-  await Promise.allSettled([loadOverview(),loadSignals(),loadPositions(),loadSmart(),loadLearning()]);
+  await Promise.allSettled([loadOverview(),loadSignals(),loadPositions(),loadHistory(),loadSmart(),loadLearning()]);
 }
-
 refresh();
 setInterval(refresh,POLL);
 </script>
