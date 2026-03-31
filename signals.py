@@ -197,8 +197,8 @@ class SignalEngine:
         agreement = max(yes_v, no_v) / len(signals)
         avg_conf  = sum(s.confidence for s in signals) / len(signals)
 
-        if   avg_conf > 0.60 and agreement >= 0.60 and edge > 0.06: conf = "high"
-        elif avg_conf > 0.40 and agreement >= 0.40 and edge > 0.03: conf = "medium"
+        if   avg_conf > 0.55 and agreement >= 0.55 and edge > 0.05: conf = "high"
+        elif avg_conf > 0.30 and agreement >= 0.40 and edge > 0.02: conf = "medium"
         else:                                                          conf = "low"
 
         top3      = sorted(signals, key=lambda s: s.confidence*s.weight, reverse=True)[:3]

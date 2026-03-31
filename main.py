@@ -252,8 +252,10 @@ class Prometheus:
         self._daily_signals += len(all_markets)
         log.info(f"Рынков загружено: {len(all_markets)} (из 50)")
 
-        # Этап 2: полный AI анализ только топ-10 кандидатов
-        candidates = screen(all_markets, top_n=cfg.max_markets)
+        # Этап 2: полный AI анализ топ-10 кандидатов
+        # В DRY RUN берём топ-15 для накопления данных
+        top_n = 15 if cfg.dry_run else cfg.max_markets
+        candidates = screen(all_markets, top_n=top_n)
         log.info(f"После скрининга: {len(candidates)} кандидатов для AI")
 
         for cand in candidates:
@@ -288,7 +290,11 @@ class Prometheus:
 
             if result.direction == "NEUTRAL":       continue
             if result.edge < cfg.min_edge:           continue
-            if result.confidence == "low":           continue
+            # В DRY RUN принимаем medium confidence тоже
+            if cfg.dry_run:
+                if result.confidence == "low":       continue
+            else:
+                if result.confidence == "low":       continue
 
             size     = self.risk.kelly_size(result.ai_probability,
                                             market.yes_price, result.direction,
