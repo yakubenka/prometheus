@@ -19,11 +19,16 @@ GAMMA = "https://gamma-api.polymarket.com"
 CLOB  = "https://clob.polymarket.com"
 
 
-def check_market_outcome(market_id: str) -> Optional[str]:
+def check_market_outcome(market_id: str, current_price: float = None) -> Optional[str]:
     """
     Проверить резолюцию рынка.
     Возвращает "YES" / "NO" / None (ещё не резолвнут).
     """
+    # Быстрая проверка по текущей цене если она передана
+    if current_price is not None:
+        if current_price >= 0.99:  return "YES"
+        if current_price <= 0.01:  return "NO"
+
     try:
         r = requests.get(f"{GAMMA}/markets/{market_id}", timeout=8)
         if r.status_code != 200:
@@ -37,7 +42,7 @@ def check_market_outcome(market_id: str) -> Optional[str]:
             if w in ("YES", "1", "TRUE"):  return "YES"
             if w in ("NO",  "0", "FALSE"): return "NO"
 
-        # По цене: если рынок закрыт и цена ~1.0 или ~0.0
+        # По цене из API
         if m.get("closed") or m.get("active") == False:
             prices = m.get("outcomePrices")
             if isinstance(prices, str):
@@ -90,7 +95,9 @@ class PositionResolver:
 
         closed_now = []
         for pos in open_pos:
-            outcome = check_market_outcome(pos.market_id)
+            # Сначала получаем текущую цену — быстрее чем ждать Gamma API
+            cur_price = get_current_price(pos.token_id) if pos.token_id else None
+            outcome   = check_market_outcome(pos.market_id, current_price=cur_price)
             if outcome is None:
                 continue  # ещё не резолвнут
 
