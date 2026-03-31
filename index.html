@@ -370,15 +370,20 @@ async function loadPositions(){
 
     function fmtPos(p){
       const up=(+p.pnl||0)>=0;
-      const url=p.url||'https://polymarket.com';
-      const cur=p.current_price&&(+p.current_price)>0&&(+p.current_price)!=(+p.price)?` · now ${(+p.current_price).toFixed(3)}`:'';
+      // Если URL старый формат /event/ без реального slug — используем поиск
+      let url=p.url||'';
+      if(!url||url.includes('/event/')||url.includes('polymarket.com/market')){
+        const words=encodeURIComponent((p.question||'').split(' ').slice(0,5).join(' '));
+        url=`https://polymarket.com/markets?_s=${words}`;
+      }
+      const cur=p.current_price&&(+p.current_price)>0&&Math.abs((+p.current_price)-(+p.price))>0.005?` · now ${(+p.current_price).toFixed(3)}`:'';
       return `<div class="pos-item" onclick="window.open('${url}','_blank')">
         <div class="pos-top">
           <div class="pos-left">
             <div class="sig-badges">${badge(p.direction||'—')}${(p.tags||[]).slice(0,2).map(badge).join('')}</div>
             <div class="pos-q">${p.question||''}</div>
             <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)}${cur}</div>
-            <div class="pos-link">↗ Open on Polymarket</div>
+            <div class="pos-link">↗ Search on Polymarket</div>
           </div>
           <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sign(p.pnl||0)}</div>
         </div>
@@ -431,7 +436,11 @@ async function loadHistory(){
     // Trade list — newest first
     $('hist-list').innerHTML=[...history].reverse().map(p=>{
       const up=(+p.pnl||0)>=0;
-      const url=p.url||'https://polymarket.com';
+      let url=p.url||'';
+      if(!url||url.includes('/event/')||url.includes('polymarket.com/market')){
+        const words=encodeURIComponent((p.question||'').split(' ').slice(0,5).join(' '));
+        url=`https://polymarket.com/markets?_s=${words}`;
+      }
       const date=(p.closed_at||p.opened_at||'').substring(0,10);
       const outcome=up?'WIN':'LOSS';
       return `<div class="hist-item" onclick="window.open('${url}','_blank')">
