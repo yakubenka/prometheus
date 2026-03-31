@@ -124,25 +124,21 @@ def screen(markets: list[Market], top_n: int = 10) -> list[ScreenResult]:
     log.info(f"🔍 Скрининг {len(markets)} рынков...")
     results = []
 
-    # Домены которые пропускаем — спорт слишком непредсказуем для AI
-    SKIP_TAGS = {"sports"}
-    # Цены близкие к 0 или 1 — рынок уже почти решён, нет смысла входить
-    SKIP_PRICE_EXTREMES = 0.08  # пропускаем если YES < 8% или > 92%
-
     for market in markets:
-        # Пропускаем спортивные рынки
-        if market.tags and SKIP_TAGS & set(market.tags):
-            log.debug(f"  Skip sports: {market.question[:40]}")
-            continue
-
-        # Пропускаем рынки с ценой близкой к разрешению
-        if market.yes_price < SKIP_PRICE_EXTREMES or market.yes_price > (1 - SKIP_PRICE_EXTREMES):
-            log.debug(f"  Skip extreme price {market.yes_price:.2f}: {market.question[:40]}")
-            continue
-
         # Пропускаем рынки с плохим спредом
         if market.spread > 0.05:
             continue
+
+        # Не входим если рынок закрывается через < 2 часа (матч уже идёт)
+        if market.end_date:
+            try:
+                end = datetime.fromisoformat(market.end_date.replace("Z","+00:00"))
+                hours_left = (end - datetime.now(timezone.utc)).total_seconds() / 3600
+                if hours_left < 2:
+                    log.debug(f"  Skip — closes in {hours_left:.1f}h: {market.question[:40]}")
+                    continue
+            except Exception:
+                pass
 
         mom_score, move_24h = _momentum_score(market)
         vol_score            = _volume_score(market)
