@@ -63,12 +63,19 @@ class Market:
     @property
     def polymarket_url(self) -> str:
         """Прямая ссылка на рынок на Polymarket."""
-        if self.slug:
-            return f"https://polymarket.com/event/{self.slug}"
-        # Fallback — поиск по названию
-        import urllib.parse
-        q = urllib.parse.quote(self.question[:60])
-        return f"https://polymarket.com/markets?_s={q}"
+        slug = self.slug or self._make_slug(self.question)
+        return f"https://polymarket.com/event/{slug}"
+
+    @staticmethod
+    def _make_slug(question: str) -> str:
+        """Генерирует slug из вопроса: 'Will X happen?' → 'will-x-happen'"""
+        import re
+        s = question.lower().strip()
+        s = re.sub(r'[^a-z0-9\s-]', '', s)   # убираем спецсимволы
+        s = re.sub(r'\s+', '-', s)             # пробелы → дефисы
+        s = re.sub(r'-+', '-', s)              # двойные дефисы → один
+        s = s.strip('-')
+        return s[:80]                           # максимум 80 символов
 
     @property
     def is_tradeable(self) -> bool:
