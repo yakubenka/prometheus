@@ -95,7 +95,7 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
   <!-- OVERVIEW -->
   <div id="s-overview" class="screen active">
     <div class="hero">
-      <div class="lbl">TODAY'S P&L</div>
+      <div class="lbl">CURRENT BALANCE</div>
       <div class="big" id="pnl-today">+$0.00</div>
       <div class="upnl" id="upnl-ov"></div>
       <div class="sub" id="pnl-all">All time +$0.00</div>
@@ -140,6 +140,7 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'He
       <div class="row"><span style="font-size:15px">Smart money alerts</span><span style="font-size:15px;font-weight:600;color:#ffd60a" id="sm-today">0</span></div>
       <div class="row"><span style="font-size:15px">Bankroll</span><span style="font-size:15px;font-weight:600" id="bankroll">$100</span></div>
       <div class="row"><span style="font-size:15px">Open exposure</span><span style="font-size:15px;font-weight:600" id="exposure">$0.00</span></div>
+      <div class="row"><span style="font-size:15px">Free capital</span><span style="font-size:15px;font-weight:600;color:#30d158" id="free-cap">$100.00</span></div>
     </div>
   </div>
 
@@ -276,12 +277,26 @@ async function loadOverview(){
     const d=await api('/api/overview');
     setLive(true);
     const up=(d.pnl_today||0)>=0;
-    $('pnl-today').textContent=sign(d.pnl_today||0);
-    $('pnl-today').style.color=up?'#30d158':'#ff453a';
-    $('pnl-all').textContent='All time '+sign(d.pnl_total||0);
-    const upnl=d.unrealised_pnl||0;
-    if(upnl!==0){$('upnl-ov').textContent=(upnl>=0?'+':'−')+'$'+Math.abs(upnl).toFixed(2)+' unrealised';$('upnl-ov').style.color=upnl>=0?'#30d158':'#ff453a';}
-    else{$('upnl-ov').textContent='';}
+    const realised   = d.pnl_today   || 0;
+    const unrealised = d.unrealised_pnl || 0;
+    const combined   = realised + unrealised;
+    const bankroll   = d.bankroll || 100;
+    const totalPnl   = d.pnl_total || 0;
+
+    // Текущий баланс = стартовый + все закрытые P&L + unrealised
+    const currentBalance = bankroll + totalPnl + unrealised;
+
+    $('pnl-today').textContent = '$' + currentBalance.toFixed(2);
+    $('pnl-today').style.color = currentBalance >= bankroll ? '#30d158' : '#ff453a';
+
+    // Изменение от старта
+    const change = currentBalance - bankroll;
+    const changePct = ((change / bankroll) * 100).toFixed(1);
+    $('upnl-ov').textContent = (change >= 0 ? '+' : '') + '$' + change.toFixed(2) + ' (' + changePct + '%) from $' + bankroll;
+    $('upnl-ov').style.color = change >= 0 ? '#30d158' : '#ff453a';
+
+    $('pnl-all').textContent = 'Today: ' + (combined >= 0 ? '+' : '') + '$' + combined.toFixed(2) +
+                               (unrealised !== 0 ? ' (incl. $' + unrealised.toFixed(2) + ' open)' : '');
     const bc=d.bot_running?'#30d158':'#ff453a';
     $('bring').style.background=bc;$('bcore').style.background=bc;
     $('bot-st').textContent=d.bot_running?'Running':'Stopped';
@@ -292,6 +307,9 @@ async function loadOverview(){
     $('sm-today').textContent=d.smart_money_today||0;
     $('bankroll').textContent='$'+(d.bankroll||100);
     $('exposure').textContent=usd(d.open_exposure||0);
+    const freeCap = (d.bankroll||100) - (d.open_exposure||0);
+    $('free-cap').textContent = '$' + Math.max(0, freeCap).toFixed(2);
+    $('free-cap').style.color = freeCap > 20 ? '#30d158' : freeCap > 5 ? '#ff9f0a' : '#ff453a';
     $('upd-time').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
     const lp=d.daily_loss_used||0;
     $('loss-pct').textContent=(lp*100).toFixed(1)+'%';

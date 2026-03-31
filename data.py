@@ -54,10 +54,21 @@ class Market:
     token_id_no:  Optional[str]
     description:  str
     tags:         tuple          # immutable
+    slug:         Optional[str] = None   # для прямых ссылок на Polymarket
 
     @property
     def spread(self) -> float:
         return abs(self.yes_price + self.no_price - 1.0)
+
+    @property
+    def polymarket_url(self) -> str:
+        """Прямая ссылка на рынок на Polymarket."""
+        if self.slug:
+            return f"https://polymarket.com/event/{self.slug}"
+        # Fallback — поиск по названию
+        import urllib.parse
+        q = urllib.parse.quote(self.question[:60])
+        return f"https://polymarket.com/markets?_s={q}"
 
     @property
     def is_tradeable(self) -> bool:
@@ -261,6 +272,7 @@ def _parse_market(m: dict) -> Optional[Market]:
             token_id_no  = token_no,
             description  = str(m.get("description") or "")[:500],
             tags         = tags,
+            slug         = m.get("slug") or m.get("marketSlug") or None,
         )
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
         log.debug(f"Ошибка парсинга рынка: {e}")

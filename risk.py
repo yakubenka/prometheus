@@ -41,6 +41,7 @@ class Position:
     pnl:          Optional[float] = None
     signal_type:  str          = "ai"
     token_id:     Optional[str]   = None   # для realtime P&L
+    slug:         Optional[str]   = None   # для прямой ссылки на Polymarket
 
 
 @dataclass
@@ -154,6 +155,7 @@ class RiskManager:
         tags:        list[str] = None,
         signal_type: str       = "ai",
         token_id:    str       = None,
+        slug:        str       = None,
     ) -> Position:
         pos = Position(
             market_id   = market_id,
@@ -165,6 +167,7 @@ class RiskManager:
             tags        = tags or [],
             signal_type = signal_type,
             token_id    = token_id,
+            slug        = slug,
         )
         self._positions.append(pos)
         self._save()

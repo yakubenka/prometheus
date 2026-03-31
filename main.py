@@ -282,7 +282,7 @@ class Prometheus:
                 "confidence": result.confidence,
                 "prob":       round(result.ai_probability, 3),
                 "detail":     f"{result.reasoning[:120]} | Pre-score: {cand.pre_score:.2f} ({cand.reason})",
-                "url":        f"https://polymarket.com/markets?_s={market.question[:50].replace(' ', '%20')}",
+                "url":        market.polymarket_url,
                 "traded":     False,
                 "pre_score":  cand.pre_score,
             })
@@ -315,7 +315,7 @@ class Prometheus:
                          else market.token_id_no)
                 self.risk.open(market.id, market.question, result.direction,
                                price, decision.size_usd, list(market.tags),
-                               "ai", token_id=token)
+                               "ai", token_id=token, slug=market.slug)
                 ai_trades += 1
                 # Помечаем сигнал как исполненный
                 for s in reversed(self._signal_history):
@@ -368,13 +368,13 @@ class Prometheus:
                 cur   = current_price if p.direction == "YES" else 1 - current_price
                 return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
 
-            def polymarket_url(market_id: str, question: str = "") -> str:
-                """Ссылка на рынок на Polymarket через поиск."""
-                if question:
-                    import urllib.parse
-                    q = urllib.parse.quote(question[:50])
-                    return f"https://polymarket.com/markets?_s={q}"
-                return "https://polymarket.com"
+            def polymarket_url(p) -> str:
+                """Прямая ссылка на рынок."""
+                if hasattr(p, 'slug') and p.slug:
+                    return f"https://polymarket.com/event/{p.slug}"
+                import urllib.parse
+                q = urllib.parse.quote((p.question or "")[:60])
+                return f"https://polymarket.com/markets?_s={q}"
 
             def fmt(p, fetch_price: bool = False):
                 current_price = get_current_price(p.token_id) if fetch_price and p.token_id else 0.0
@@ -391,7 +391,7 @@ class Prometheus:
                     "tags":         p.tags,
                     "status":       p.status,
                     "type":         p.signal_type,
-                    "url":          polymarket_url(p.market_id, p.question),
+                    "url":          polymarket_url(p),
                     "token_id":     p.token_id or "",
                 }
 
