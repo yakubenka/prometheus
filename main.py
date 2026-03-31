@@ -419,6 +419,9 @@ class Prometheus:
                     "domains": profile.specializations,
                 })
 
+            # Считаем сколько крупных сделок просканировано всего
+            total_scanned = getattr(self.sm, '_total_scanned', 0)
+
             # Learning stats
             learning_stats = self.learning.stats()
 
@@ -447,6 +450,9 @@ class Prometheus:
                 "smart_money": {
                     "traders":       sm_traders,
                     "total_tracked": len(self.sm.known_wallets),
+                    "total_noise":   sum(1 for p in self.sm.known_wallets.values() if p.trader_class.value == "noise"),
+                    "status":        "active" if self._daily_sm_alerts > 0 else "scanning",
+                    "scanned_today": self._daily_signals,
                 },
                 "learning": {
                     "signal_stats": learning_stats,

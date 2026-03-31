@@ -423,8 +423,35 @@ async function loadSmart(){
   try{
     const d=await api('/api/smart_money');
     const traders=d.traders||[];
-    $('sm-tracked').textContent=(d.total_tracked||traders.length)+' wallets tracked';
-    if(!traders.length){$('sm-list').innerHTML='<div class="empty">Bot scans 100+ large trades per cycle.<br><br>High-performance wallets will appear here after detection.</div>';return;}
+    const total=d.total_tracked||0;
+    const noise=d.total_noise||0;
+    const status=d.status||'scanning';
+
+    // Status line
+    if(total > 0){
+      $('sm-tracked').textContent=`${total} wallets tracked · ${noise} noise filtered`;
+    } else {
+      $('sm-tracked').textContent='Scanning on-chain trades every 5 min…';
+    }
+
+    if(!traders.length){
+      $('sm-list').innerHTML=`<div style="padding:20px 18px">
+        <div style="font-size:14px;color:rgba(255,255,255,.7);margin-bottom:12px">
+          ${status === 'scanning' ? '🔍 Scanning for smart money...' : '✅ No insiders detected yet'}
+        </div>
+        <div style="font-size:12px;color:rgba(255,255,255,.35);line-height:1.7">
+          Bot scans 100+ large trades (>$3,000) every cycle.<br><br>
+          Wallets need <strong style="color:rgba(255,255,255,.6)">10+ resolved trades</strong> to be classified.<br><br>
+          Insiders appear here when a wallet shows:<br>
+          • Win rate >80% on geopolitics/politics<br>
+          • Large bets on low-probability events<br>
+          • Consistent profit over time
+        </div>
+        ${total > 0 ? `<div style="margin-top:14px;font-size:12px;color:rgba(255,255,255,.4)">${total} wallets analyzed · ${noise} classified as noise</div>` : ''}
+      </div>`;
+      return;
+    }
+
     const cc={Insider:'#ff453a',Sharp:'#ffd60a',Contrarian:'#0a84ff'};
     $('sm-list').innerHTML=traders.map((t,i)=>{
       const col=cc[t.class]||'#8e8e93';
