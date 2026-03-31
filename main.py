@@ -369,11 +369,12 @@ class Prometheus:
                 return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
 
             def polymarket_url(p) -> str:
-                """Прямая ссылка на рынок."""
+                """Ссылка на рынок через поиск — работает для всех типов."""
+                import urllib.parse
                 if hasattr(p, 'slug') and p.slug:
                     return f"https://polymarket.com/event/{p.slug}"
-                import urllib.parse
-                q = urllib.parse.quote((p.question or "")[:60])
+                words = ' '.join((p.question or '').split()[:5])
+                q = urllib.parse.quote(words)
                 return f"https://polymarket.com/markets?_s={q}"
 
             def fmt(p, fetch_price: bool = False):

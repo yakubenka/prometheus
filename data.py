@@ -62,9 +62,14 @@ class Market:
 
     @property
     def polymarket_url(self) -> str:
-        """Прямая ссылка на рынок на Polymarket."""
-        slug = self.slug or self._make_slug(self.question)
-        return f"https://polymarket.com/event/{slug}"
+        """Ссылка на рынок на Polymarket."""
+        import urllib.parse
+        if self.slug:
+            return f"https://polymarket.com/event/{self.slug}"
+        # Поиск по первым 4-5 словам вопроса
+        words = ' '.join(self.question.split()[:5])
+        q = urllib.parse.quote(words)
+        return f"https://polymarket.com/markets?_s={q}"
 
     @staticmethod
     def _make_slug(question: str) -> str:
