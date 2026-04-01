@@ -158,6 +158,7 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
     <div class="hero-sub" id="bal-sub"></div>
   </div>
 
+  <!-- Bot status -->
   <div class="card">
     <div class="bot-card">
       <div class="bot-top">
@@ -182,24 +183,48 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
     </div>
   </div>
 
-  <div class="card">
-    <div class="prog-card">
-      <div class="prog-hd"><span class="pt">Daily Limit</span><span id="lpct" style="font-weight:600">0%</span></div>
-      <div class="prog-bar"><div class="prog-fill" id="lbar" style="width:0%;background:#30d158"></div></div>
-      <div class="prog-ft"><span>$0</span><span>$50</span></div>
+  <!-- P&L Mini Chart -->
+  <div class="card" style="padding:14px 16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span style="font-size:12px;font-weight:600;color:rgba(255,255,255,.4);letter-spacing:.05em">P&L HISTORY</span>
+      <span style="font-size:11px;color:rgba(255,255,255,.25)">last 10 trades</span>
+    </div>
+    <canvas id="pnl-chart" height="60" style="width:100%"></canvas>
+    <div style="display:flex;justify-content:space-between;margin-top:8px">
+      <span style="font-size:10px;color:rgba(255,255,255,.25)">oldest</span>
+      <span style="font-size:10px;color:rgba(255,255,255,.25)">latest</span>
     </div>
   </div>
 
-  <div class="sec" id="ov-pos-sec" style="display:none">OPEN</div>
-  <div class="card" id="ov-pos" style="display:none"></div>
+  <!-- Win rate by category -->
+  <div class="card" style="padding:14px 16px">
+    <div style="font-size:12px;font-weight:600;color:rgba(255,255,255,.4);letter-spacing:.05em;margin-bottom:12px">WIN RATE BY CATEGORY</div>
+    <div id="wr-cats"><div style="font-size:12px;color:rgba(255,255,255,.2)">Accumulating data…</div></div>
+  </div>
 
+  <!-- Activity & Capital -->
   <div class="card">
     <div class="card-row"><span class="lbl">Signals today</span><span class="val" id="nsig">0</span></div>
-    <div class="card-row"><span class="lbl">Smart money</span><span class="val" id="nsm" style="color:#ffd60a">0</span></div>
+    <div class="card-row"><span class="lbl">Markets scanned</span><span class="val" id="nscanned" style="color:rgba(255,255,255,.5)">0</span></div>
+    <div class="card-row"><span class="lbl">Smart money alerts</span><span class="val" id="nsm" style="color:#ffd60a">0</span></div>
     <div class="card-row"><span class="lbl">Free capital</span><span class="val" id="free" style="color:#30d158">$100</span></div>
-    <div class="card-row"><span class="lbl">Exposure</span><span class="val" id="expo">$0</span></div>
+    <div class="card-row"><span class="lbl">Open exposure</span><span class="val" id="expo">$0</span></div>
   </div>
-</div>
+
+  <!-- Daily limit -->
+  <div class="card">
+    <div class="prog-card">
+      <div class="prog-hd"><span class="pt">Daily Loss Limit</span><span id="lpct" style="font-weight:600">0%</span></div>
+      <div class="prog-bar"><div class="prog-fill" id="lbar" style="width:0%;background:#30d158"></div></div>
+      <div class="prog-ft"><span>$0</span><span>$50 max</span></div>
+    </div>
+  </div>
+
+  <!-- Top signal right now -->
+  <div class="sec">TOP SIGNAL NOW</div>
+  <div class="card" id="top-signal">
+    <div class="empty">Waiting for next cycle…</div>
+  </div>
 
 <!-- SIGNALS -->
 <div id="s-sig" class="screen">
@@ -392,11 +417,132 @@ async function loadOV() {
     $('free').textContent    = '$' + Math.max(0, bankroll - (d.open_exposure||0)).toFixed(2);
     $('upd').textContent     = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
 
-    const lp = d.daily_loss_used || 0;
-    $('lpct').textContent = pct(lp);
-    $('lbar').style.width = (lp * 100) + '%';
-    $('lbar').style.background = lp < .5 ? '#30d158' : lp < .8 ? '#ff9f0a' : '#ff453a';
+    // Top signal
+    try {
+      const sd = await api('/api/signals');
+      const signals = (sd.signals||[]).filter(s => s.direction && s.direction !== 'NEUTRAL' && s.edge > 0.05);
+      const top = signals.sort((a,b) => (b.edge||0)-(a.edge||0))[0];
+      if (top) {
+        const col = top.direction === 'YES' ? '#30d158' : '#ff453a';
+        $('top-signal').innerHTML = `<div style="padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+            <div style="display:flex;gap:5px">${tag(top.direction)}${tag(top.type||'ensemble')}<span style="font-size:10px;color:rgba(255,255,255,.3);align-self:center">${top.confidence||''}</span></div>
+            <span style="font-size:18px;font-weight:700;color:${col}">Edge ${((top.edge||0)*100).toFixed(1)}%</span>
+          </div>
+          <div style="font-size:14px;font-weight:500;line-height:1.35;margin-bottom:6px">${top.question||''}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.3)">${((top.prob||0)*100).toFixed(0)}% AI probability · ${top.time||''}</div>
+        </div>`;
+      } else {
+        $('top-signal').innerHTML = '<div class="empty">No strong signals yet this cycle</div>';
+      }
+    } catch {}
+
+    // P&L chart from history
+    try {
+      const pd = await api('/api/positions');
+      const hist = (pd.history||[]).slice(-10);
+      drawPnlChart(hist);
+
+      // Win rate by category
+      const catStats = {};
+      for (const p of (pd.history||[])) {
+        for (const t of (p.tags||[])) {
+          if (!catStats[t]) catStats[t] = {w:0,t:0};
+          catStats[t].t++;
+          if ((+p.pnl||0) > 0) catStats[t].w++;
+        }
+      }
+      const cats = Object.entries(catStats).filter(([,v]) => v.t >= 1)
+        .sort((a,b) => b[1].t - a[1].t).slice(0,5);
+      if (cats.length) {
+        $('wr-cats').innerHTML = cats.map(([name, s]) => {
+          const wr = s.t > 0 ? s.w/s.t : 0;
+          const col = wr > 0.6 ? '#30d158' : wr > 0.4 ? '#ffd60a' : '#ff453a';
+          const tagCol = COLS[name] || 'rgba(255,255,255,.3)';
+          return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:11px;font-weight:600;color:${tagCol};min-width:80px;text-transform:capitalize">${name}</span>
+            <div style="flex:1;height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden">
+              <div style="height:100%;width:${wr*100}%;background:${col};border-radius:2px;transition:width .6s ease"></div>
+            </div>
+            <span style="font-size:12px;font-weight:600;color:${col};min-width:32px;text-align:right">${(wr*100).toFixed(0)}%</span>
+            <span style="font-size:10px;color:rgba(255,255,255,.25)">${s.t}t</span>
+          </div>`;
+        }).join('');
+      } else {
+        $('wr-cats').innerHTML = '<div style="font-size:12px;color:rgba(255,255,255,.2)">Accumulating data…</div>';
+      }
+    } catch {}
+
   } catch { setLive(false); }
+}
+
+// ── P&L Chart ──────────────────────────────────────────────────────
+function drawPnlChart(history) {
+  const canvas = $('pnl-chart');
+  if (!canvas || !canvas.getContext) return;
+  const W = canvas.offsetWidth || 360;
+  canvas.width  = W * window.devicePixelRatio;
+  canvas.height = 60 * window.devicePixelRatio;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+  if (!history.length) {
+    ctx.fillStyle = 'rgba(255,255,255,.1)';
+    ctx.font = '11px -apple-system';
+    ctx.fillText('No closed trades yet', 10, 30);
+    return;
+  }
+
+  // Running cumulative P&L
+  let cum = 0;
+  const points = history.map(p => { cum += (+p.pnl||0); return cum; });
+  const mn = Math.min(0, ...points);
+  const mx = Math.max(0, ...points);
+  const range = mx - mn || 1;
+  const pad = 8;
+  const h = 60 - pad*2;
+  const w = W - pad*2;
+
+  const px = (i) => pad + (i / Math.max(points.length-1, 1)) * w;
+  const py = (v) => pad + (1 - (v - mn) / range) * h;
+
+  // Zero line
+  ctx.strokeStyle = 'rgba(255,255,255,.08)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3,3]);
+  ctx.beginPath();
+  ctx.moveTo(pad, py(0)); ctx.lineTo(pad+w, py(0));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, pad, 0, pad+h);
+  const isUp = points[points.length-1] >= 0;
+  grad.addColorStop(0, isUp ? 'rgba(48,209,88,.3)' : 'rgba(255,69,58,.3)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+  ctx.beginPath();
+  ctx.moveTo(px(0), py(0));
+  points.forEach((v,i) => ctx.lineTo(px(i), py(v)));
+  ctx.lineTo(px(points.length-1), py(0));
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = isUp ? '#30d158' : '#ff453a';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  points.forEach((v,i) => i===0 ? ctx.moveTo(px(i),py(v)) : ctx.lineTo(px(i),py(v)));
+  ctx.stroke();
+
+  // Last point dot
+  const lx = px(points.length-1), ly = py(points[points.length-1]);
+  ctx.beginPath();
+  ctx.arc(lx, ly, 3, 0, Math.PI*2);
+  ctx.fillStyle = isUp ? '#30d158' : '#ff453a';
+  ctx.fill();
 }
 
 // ── Signals ────────────────────────────────────────────────────────
@@ -471,22 +617,6 @@ async function loadPos() {
     $('upnl').style.color = upnl >= 0 ? '#30d158' : '#ff453a';
     $('pos-sec').textContent = open.length + ' OPEN';
     $('poslist').innerHTML = open.length ? open.map(p => fmtPos(p)).join('') : '<div class="empty">No open positions</div>';
-
-    // Mini list on overview
-    if (open.length) {
-      $('ov-pos-sec').style.display = 'block';
-      $('ov-pos').style.display     = 'block';
-      $('ov-pos').innerHTML = open.map(p => {
-        const up = (+p.pnl||0) >= 0;
-        return `<div class="card-row" onclick="go('pos')" style="cursor:pointer">
-          <span style="font-size:13px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:240px;display:flex;align-items:center;gap:6px">${tag(p.direction||'—')}<span>${p.question||''}</span></span>
-          <span style="font-weight:600;color:${up?'#30d158':'#ff453a'}">${sgn(p.pnl||0)}</span>
-        </div>`;
-      }).join('');
-    } else {
-      $('ov-pos-sec').style.display = 'none';
-      $('ov-pos').style.display     = 'none';
-    }
   } catch {}
 }
 
