@@ -308,7 +308,8 @@ class Prometheus:
 
             self.tg.trade(market.question, result.direction, price,
                           decision.size_usd, result.edge, result.confidence,
-                          result.reasoning, cfg.dry_run)
+                          result.reasoning, cfg.dry_run,
+                          signals=result.signals)
 
             if _execute(market, result.direction, decision.size_usd, price):
                 token = (market.token_id_yes if result.direction == "YES"

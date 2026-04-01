@@ -57,16 +57,39 @@ class Telegram:
 
     def trade(self, question: str, direction: str, price: float,
               size: float, edge: float, confidence: str,
-              reasoning: str, dry_run: bool) -> None:
+              reasoning: str, dry_run: bool,
+              signals: list = None) -> None:
         icon = "📝" if dry_run else "💰"
-        tag  = "Paper" if dry_run else "LIVE"
-        self.send(
-            f"{icon} *{tag} Trade*\n"
-            f"{question[:65]}\n\n"
-            f"{direction} @ `{price:.3f}` | *${size:.2f}*\n"
-            f"Edge `{edge:.1%}` · {confidence}\n"
-            f"_{reasoning[:120]}_"
-        )
+        tag  = "PAPER" if dry_run else "🔴 LIVE"
+
+        lines = [
+            f"{icon} *{tag} — Новая позиция*",
+            f"",
+            f"*{question[:80]}*",
+            f"",
+            f"▸ Направление: *{direction}* @ `{price:.3f}`",
+            f"▸ Размер: *${size:.2f}* | Edge: *{edge:.1%}*",
+            f"▸ Уверенность: *{confidence}*",
+        ]
+
+        # Reasoning от сигналов
+        if signals:
+            lines.append(f"")
+            lines.append(f"🧠 *Почему открыли:*")
+            for s in signals:
+                if s.reasoning and s.reasoning not in ("error", "insufficient history", "no Kalshi match"):
+                    icon_s = "↑" if s.direction == "YES" else "↓" if s.direction == "NO" else "→"
+                    lines.append(f"`{s.name}` {icon_s} {s.reasoning[:100]}")
+        elif reasoning:
+            lines.append(f"")
+            lines.append(f"🧠 *Reasoning:*")
+            # Разбиваем reasoning на части если он содержит · разделители
+            parts = reasoning.split(" · ")
+            for part in parts[:3]:
+                if part.strip():
+                    lines.append(f"• {part.strip()[:120]}")
+
+        self.send("\n".join(lines))
 
     def smart_money(self, question: str, direction: str,
                     price: float, size: float, reasoning: str) -> None:
@@ -80,10 +103,12 @@ class Telegram:
     def closed(self, question: str, direction: str,
                outcome: str, pnl: float) -> None:
         icon = "✅" if pnl >= 0 else "❌"
+        result = "WIN" if pnl >= 0 else "LOSS"
         self.send(
-            f"{icon} *Позиция закрыта*\n"
-            f"{question[:65]}\n\n"
-            f"{direction} → {outcome} | P&L: *${pnl:+.2f}*"
+            f"{icon} *{result} — Позиция закрыта*\n\n"
+            f"*{question[:80]}*\n\n"
+            f"▸ Ставка: *{direction}* → Исход: *{outcome}*\n"
+            f"▸ P&L: *${pnl:+.2f}*"
         )
 
     def arbitrage(self, title: str, content: str) -> None:
