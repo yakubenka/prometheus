@@ -87,7 +87,7 @@ class PositionResolver:
     def run(self) -> list[dict]:
         """
         Проверить все открытые позиции.
-        Возвращает список закрытых позиций (для обновления весов сигналов).
+        Закрывает по резолюции или по stop-loss (-40%).
         """
         open_pos = self.risk.open_positions
         if not open_pos:
@@ -95,46 +95,65 @@ class PositionResolver:
 
         closed_now = []
         for pos in open_pos:
-            # Сначала получаем текущую цену — быстрее чем ждать Gamma API
+            # Текущая цена токена
             cur_price = get_current_price(pos.token_id) if pos.token_id else None
-            outcome   = check_market_outcome(pos.market_id, current_price=cur_price)
-            if outcome is None:
-                continue  # ещё не резолвнут
 
-            won = (
-                (pos.direction == "YES" and outcome == "YES") or
-                (pos.direction == "NO"  and outcome == "NO")
-            )
-
-            closed = self.risk.close(pos.market_id, exit_price=1.0 if won else 0.0, won=won)
-            if closed:
-                closed_now.append({
-                    "market_id":    pos.market_id,
-                    "question":     pos.question,
-                    "direction":    pos.direction,
-                    "entry_price":  pos.entry_price,
-                    "outcome":      outcome,
-                    "won":          won,
-                    "pnl":          closed.pnl,
-                    "signal_type":  pos.signal_type,
-                    "tags":         pos.tags,
-                })
-
-                emoji = "✅" if won else "❌"
-                self.tg(
-                    f"{emoji} *Позиция закрыта*\n\n"
-                    f"{pos.question[:70]}\n\n"
-                    f"Исход: *{outcome}* | Наша ставка: *{pos.direction}*\n"
-                    f"P&L: *${closed.pnl:+.2f}*"
+            # 1. Проверяем резолюцию рынка
+            outcome = check_market_outcome(pos.market_id, current_price=cur_price)
+            if outcome is not None:
+                won = (
+                    (pos.direction == "YES" and outcome == "YES") or
+                    (pos.direction == "NO"  and outcome == "NO")
                 )
-                log.info(
-                    f"{'WIN' if won else 'LOSS'} | {pos.question[:50]} | "
-                    f"P&L ${closed.pnl:+.2f}"
-                )
+                closed = self.risk.close(pos.market_id, exit_price=1.0 if won else 0.0, won=won)
+                if closed:
+                    closed_now.append(self._make_closed_dict(pos, outcome, won, closed.pnl))
+                    emoji = "✅" if won else "❌"
+                    self.tg(
+                        f"{emoji} *Позиция закрыта*\n\n"
+                        f"{pos.question[:70]}\n\n"
+                        f"Исход: *{outcome}* | Ставка: *{pos.direction}*\n"
+                        f"P&L: *${closed.pnl:+.2f}*"
+                    )
+                    log.info(f"{'WIN' if won else 'LOSS'} | {pos.question[:50]} | P&L ${closed.pnl:+.2f}")
+                continue
+
+            # 2. Stop-loss — если цена ушла против нас на 40%+
+            if cur_price is not None and cur_price > 0:
+                entry = pos.entry_price if pos.direction == "YES" else 1 - pos.entry_price
+                current = cur_price if pos.direction == "YES" else 1 - cur_price
+                loss_pct = (entry - current) / entry if entry > 0 else 0
+
+                if loss_pct >= 0.40:  # потеряли 40% от входной цены
+                    pnl = round((current - entry) / entry * pos.size_usd, 2)
+                    closed = self.risk.close(pos.market_id, exit_price=cur_price, won=False)
+                    if closed:
+                        closed_now.append(self._make_closed_dict(pos, "STOP_LOSS", False, pnl))
+                        self.tg(
+                            f"🛑 *Stop-loss сработал*\n\n"
+                            f"{pos.question[:70]}\n\n"
+                            f"Ставка: *{pos.direction}* | Вход: *{pos.entry_price:.3f}*\n"
+                            f"Текущая цена: *{cur_price:.3f}* | Потери: *{loss_pct:.0%}*\n"
+                            f"P&L: *${pnl:+.2f}*"
+                        )
+                        log.info(f"🛑 STOP-LOSS | {pos.question[:50]} | -{loss_pct:.0%} | P&L ${pnl:+.2f}")
 
         # Записать для self-improvement
         self._signal_outcomes.extend(closed_now)
         return closed_now
+
+    def _make_closed_dict(self, pos, outcome, won, pnl) -> dict:
+        return {
+            "market_id":   pos.market_id,
+            "question":    pos.question,
+            "direction":   pos.direction,
+            "entry_price": pos.entry_price,
+            "outcome":     outcome,
+            "won":         won,
+            "pnl":         pnl,
+            "signal_type": pos.signal_type,
+            "tags":        pos.tags,
+        }
 
     def signal_performance(self) -> dict[str, dict]:
         """
