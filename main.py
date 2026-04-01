@@ -252,10 +252,13 @@ class Prometheus:
                 profile = self.sm.known_wallets[t.maker]
                 if profile.trader_class.value != "noise":
                     alert["type"] = profile.trader_class.value
-            # Добавляем если ещё нет такой же
+            # Добавляем если ещё нет такой же (дедупликация по market_id + side + size)
             key = f"{t.market_id}_{t.side}_{round(t.size)}"
-            if not any(f"{a.get('question','')}_{a.get('direction','')}_{a.get('size','')}" == key
-                      for a in self._whale_alerts):
+            existing_keys = {
+                f"{a.get('question','')}_{a.get('direction','')}_{round(a.get('size',0))}"
+                for a in self._whale_alerts
+            }
+            if key not in existing_keys:
                 self._whale_alerts.append(alert)
         self._whale_alerts = self._whale_alerts[-50:]  # последние 50
 

@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -179,10 +179,9 @@ def positions():
     return store_get("positions") or {"open":[],"closed_today":[]}
 
 @app.post("/api/close_position")
-def close_position(request: Request):
+async def close_position(request: Request):
     """Закрыть позицию вручную из дашборда."""
-    import asyncio
-    body = asyncio.get_event_loop().run_until_complete(request.json())
+    body = await request.json()
     market_id = body.get("market_id","")
     if not market_id:
         return {"ok": False, "error": "no market_id"}
@@ -211,7 +210,6 @@ def close_position(request: Request):
     else:
         pnl = round((float(entry) - float(cur_price)) / max(1 - float(entry), 0.01) * float(size), 2)
 
-    from datetime import datetime, timezone
     found["status"]    = "closed"
     found["closed_at"] = datetime.now(timezone.utc).isoformat()
     found["exit_price"]= cur_price
