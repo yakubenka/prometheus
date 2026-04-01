@@ -126,7 +126,7 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
 .empty{padding:40px 20px;text-align:center;font-size:13px;color:rgba(255,255,255,.2);line-height:1.8}
 
 /* Tab bar */
-.tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:rgba(10,10,10,.85);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-top:1px solid rgba(255,255,255,.08);display:flex;padding-bottom:env(safe-area-inset-bottom,6px)}
+.tabs{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:rgba(10,10,10,.95);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-top:1px solid rgba(255,255,255,.08);display:flex;padding-bottom:env(safe-area-inset-bottom,6px);z-index:999}
 .tab{flex:1;border:none;background:none;cursor:pointer;padding:8px 0 3px;display:flex;flex-direction:column;align-items:center;gap:3px}
 .tab-ic{font-size:20px;line-height:1}
 .tab-lb{font-size:9px;letter-spacing:.02em;font-weight:500}
@@ -189,7 +189,7 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
       <span style="font-size:12px;font-weight:600;color:rgba(255,255,255,.4);letter-spacing:.05em">P&L HISTORY</span>
       <span style="font-size:11px;color:rgba(255,255,255,.25)">last 10 trades</span>
     </div>
-    <canvas id="pnl-chart" height="60" style="width:100%"></canvas>
+    <div id="pnl-chart"></div>
     <div style="display:flex;justify-content:space-between;margin-top:8px">
       <span style="font-size:10px;color:rgba(255,255,255,.25)">oldest</span>
       <span style="font-size:10px;color:rgba(255,255,255,.25)">latest</span>
@@ -476,73 +476,79 @@ async function loadOV() {
   } catch { setLive(false); }
 }
 
-// ── P&L Chart ──────────────────────────────────────────────────────
+// ── P&L Chart (SVG) ────────────────────────────────────────────────
 function drawPnlChart(history) {
-  const canvas = $('pnl-chart');
-  if (!canvas || !canvas.getContext) return;
-  const W = canvas.offsetWidth || 360;
-  canvas.width  = W * window.devicePixelRatio;
-  canvas.height = 60 * window.devicePixelRatio;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  const el = $('pnl-chart');
+  if (!el) return;
 
-  if (!history.length) {
-    ctx.fillStyle = 'rgba(255,255,255,.1)';
-    ctx.font = '11px -apple-system';
-    ctx.fillText('No closed trades yet', 10, 30);
+  if (!history || !history.length) {
+    el.innerHTML = '<div style="height:70px;display:flex;align-items:center;justify-content:center;font-size:12px;color:rgba(255,255,255,.2)">No closed trades yet</div>';
     return;
   }
 
-  // Running cumulative P&L
+  // Cumulative P&L
   let cum = 0;
-  const points = history.map(p => { cum += (+p.pnl||0); return cum; });
-  const mn = Math.min(0, ...points);
-  const mx = Math.max(0, ...points);
-  const range = mx - mn || 1;
-  const pad = 8;
-  const h = 60 - pad*2;
-  const w = W - pad*2;
+  const points = history.map(p => { cum += (+p.pnl||0); return +cum.toFixed(2); });
+  const mn  = Math.min(0, ...points);
+  const mx  = Math.max(0, ...points);
+  const rng = mx - mn || 1;
+  const W = 358, H = 72, padL = 40, padR = 8, padT = 8, padB = 20;
+  const iW = W - padL - padR;
+  const iH = H - padT - padB;
 
-  const px = (i) => pad + (i / Math.max(points.length-1, 1)) * w;
-  const py = (v) => pad + (1 - (v - mn) / range) * h;
+  const px = i  => padL + (i / Math.max(points.length-1, 1)) * iW;
+  const py = v  => padT + (1 - (v - mn) / rng) * iH;
+  const y0 = py(0);
 
-  // Zero line
-  ctx.strokeStyle = 'rgba(255,255,255,.08)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([3,3]);
-  ctx.beginPath();
-  ctx.moveTo(pad, py(0)); ctx.lineTo(pad+w, py(0));
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Build path
+  const pts = points.map((v,i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+  const area = `M ${px(0).toFixed(1)},${y0.toFixed(1)} ` +
+    points.map((v,i) => `L ${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ') +
+    ` L ${px(points.length-1).toFixed(1)},${y0.toFixed(1)} Z`;
 
-  // Gradient fill
-  const grad = ctx.createLinearGradient(0, pad, 0, pad+h);
   const isUp = points[points.length-1] >= 0;
-  grad.addColorStop(0, isUp ? 'rgba(48,209,88,.3)' : 'rgba(255,69,58,.3)');
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  const col  = isUp ? '#30d158' : '#ff453a';
+  const last = points[points.length-1];
+  const lx   = px(points.length-1).toFixed(1);
+  const ly   = py(last).toFixed(1);
 
-  ctx.beginPath();
-  ctx.moveTo(px(0), py(0));
-  points.forEach((v,i) => ctx.lineTo(px(i), py(v)));
-  ctx.lineTo(px(points.length-1), py(0));
-  ctx.closePath();
-  ctx.fillStyle = grad;
-  ctx.fill();
+  // Y axis labels (3 levels)
+  const yLabels = [mx, (mx+mn)/2, mn].map(v => ({
+    v, y: py(v), label: (v >= 0 ? '+' : '') + v.toFixed(2)
+  }));
 
-  // Line
-  ctx.beginPath();
-  ctx.strokeStyle = isUp ? '#30d158' : '#ff453a';
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  points.forEach((v,i) => i===0 ? ctx.moveTo(px(i),py(v)) : ctx.lineTo(px(i),py(v)));
-  ctx.stroke();
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible">
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${col}" stop-opacity="0.25"/>
+        <stop offset="100%" stop-color="${col}" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
 
-  // Last point dot
-  const lx = px(points.length-1), ly = py(points[points.length-1]);
-  ctx.beginPath();
-  ctx.arc(lx, ly, 3, 0, Math.PI*2);
-  ctx.fillStyle = isUp ? '#30d158' : '#ff453a';
-  ctx.fill();
+    <!-- Y axis labels -->
+    ${yLabels.map(l => `
+      <text x="${padL-6}" y="${l.y+4}" text-anchor="end" fill="rgba(255,255,255,.25)" font-size="9" font-family="-apple-system">${l.label}</text>
+      <line x1="${padL}" y1="${l.y}" x2="${W-padR}" y2="${l.y}" stroke="rgba(255,255,255,.05)" stroke-width="1" stroke-dasharray="3,3"/>
+    `).join('')}
+
+    <!-- Zero line -->
+    <line x1="${padL}" y1="${y0.toFixed(1)}" x2="${W-padR}" y2="${y0.toFixed(1)}" stroke="rgba(255,255,255,.12)" stroke-width="1"/>
+
+    <!-- Area fill -->
+    <path d="${area}" fill="url(#g)"/>
+
+    <!-- Line -->
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- Data points -->
+    ${points.map((v,i) => `<circle cx="${px(i).toFixed(1)}" cy="${py(v).toFixed(1)}" r="2.5" fill="${(+v)>=0?'#30d158':'#ff453a'}"/>`).join('')}
+
+    <!-- Last value label -->
+    <text x="${(+lx+5).toFixed(0)}" y="${(+ly+4).toFixed(0)}" fill="${col}" font-size="10" font-family="-apple-system" font-weight="600">${(last>=0?'+':'')+last.toFixed(2)}</text>
+
+    <!-- X axis: trade numbers -->
+    ${points.map((_,i) => i===0||i===points.length-1 ? `<text x="${px(i).toFixed(1)}" y="${H}" text-anchor="${i===0?'start':'end'}" fill="rgba(255,255,255,.2)" font-size="9" font-family="-apple-system">#${i+1}</text>` : '').join('')}
+  </svg>`;
 }
 
 // ── Signals ────────────────────────────────────────────────────────
