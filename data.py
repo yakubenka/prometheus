@@ -111,8 +111,8 @@ class Trade:
 
     @property
     def is_unusual(self) -> bool:
-        """Крупная ставка на маловероятное или высоковероятное."""
-        return self.is_large and (self.price < 0.25 or self.price > 0.75)
+        """Любая крупная ставка интересна — не только на экстремальных ценах."""
+        return self.is_large
 
 
 # ── Fetchers ──────────────────────────────────────────────────────────────────

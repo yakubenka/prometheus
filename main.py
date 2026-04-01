@@ -117,6 +117,7 @@ class Prometheus:
         self._last_limit_warn:  float           = 0.0
         self._signal_history:   list            = []   # история сигналов для дашборда
         self._last_breaking:    float           = 0.0  # время последнего breaking news цикла
+        self._whale_alerts:     list            = []   # крупные необычные сделки
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -232,6 +233,31 @@ class Prometheus:
         # 1. Smart Money
         sm_signals = self.sm.scan()
         self._daily_sm_alerts += len(sm_signals)
+
+        # Собираем whale alerts — все крупные сделки для дашборда
+        from data import fetch_large_trades
+        large_trades = fetch_large_trades(min_size=3000, hours_back=6)
+        for t in large_trades[:30]:
+            alert = {
+                "question":  t.question or t.market_id,
+                "direction": "YES" if t.side == "BUY" else "NO",
+                "price":     round(t.price, 3),
+                "size":      round(t.size, 0),
+                "wallet":    (t.maker or "")[:8] + "…" if t.maker else "unknown",
+                "time":      t.timestamp.strftime("%H:%M") if t.timestamp else "",
+                "type":      "whale",
+            }
+            # Проверяем тип кошелька
+            if t.maker and t.maker in self.sm.known_wallets:
+                profile = self.sm.known_wallets[t.maker]
+                if profile.trader_class.value != "noise":
+                    alert["type"] = profile.trader_class.value
+            # Добавляем если ещё нет такой же
+            key = f"{t.market_id}_{t.side}_{round(t.size)}"
+            if not any(f"{a.get('question','')}_{a.get('direction','')}_{a.get('size','')}" == key
+                      for a in self._whale_alerts):
+                self._whale_alerts.append(alert)
+        self._whale_alerts = self._whale_alerts[-50:]  # последние 50
 
         for sig in sm_signals[:3]:
             if not self.risk.snapshot()["can_trade"]:
@@ -481,6 +507,7 @@ class Prometheus:
                     "total_noise":   sum(1 for p in self.sm.known_wallets.values() if p.trader_class.value == "noise"),
                     "status":        "active" if self._daily_sm_alerts > 0 else "scanning",
                     "scanned_today": self._daily_signals,
+                    "whale_alerts":  self._whale_alerts[-20:],
                 },
                 "learning": {
                     "signal_stats": learning_stats,
