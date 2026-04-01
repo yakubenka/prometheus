@@ -49,10 +49,10 @@ def _parse_ai_json(text: str) -> dict:
 
 class SignalEngine:
     DEFAULT_WEIGHTS = {
-        "sentiment":   0.25,
-        "momentum":    0.20,
-        "calibration": 0.25,
-        "consensus":   0.20,
+        "sentiment":   0.30,
+        "momentum":    0.18,
+        "calibration": 0.26,
+        "consensus":   0.16,  # снижен — Kalshi не всегда доступен
         "base_rate":   0.10,
     }
 
@@ -182,27 +182,48 @@ class SignalEngine:
 
     def _ensemble(self, market: Market, signals: list[Signal]) -> EnsembleResult:
         total_w = sum(s.weight * s.confidence for s in signals)
+        # Если consensus = NEUTRAL (нет Kalshi) — убираем его из расчёта
+        # и перераспределяем вес на оставшиеся сигналы
+        active_signals = [s for s in signals
+                         if not (s.name == "consensus" and s.direction == "NEUTRAL"
+                                 and "no Kalshi" in s.reasoning)]
+        if not active_signals:
+            active_signals = signals
+
+        total_w = sum(s.weight * s.confidence for s in active_signals)
         if total_w == 0:
             return EnsembleResult(0.5, "NEUTRAL", 0, 0.5, "low", signals)
 
-        prob  = sum(s.score * s.weight * s.confidence for s in signals) / total_w
+        prob  = sum(s.score * s.weight * s.confidence for s in active_signals) / total_w
         edge  = abs(prob - market.yes_price)
 
         if   prob > market.yes_price + 0.03: direction = "YES"
         elif prob < market.yes_price - 0.03: direction = "NO"
         else:                                direction = "NEUTRAL"
 
-        yes_v    = sum(1 for s in signals if s.direction == "YES")
-        no_v     = sum(1 for s in signals if s.direction == "NO")
-        agreement = max(yes_v, no_v) / len(signals)
-        avg_conf  = sum(s.confidence for s in signals) / len(signals)
+        yes_v     = sum(1 for s in active_signals if s.direction == "YES")
+        no_v      = sum(1 for s in active_signals if s.direction == "NO")
+        agreement = max(yes_v, no_v) / len(active_signals)
+        avg_conf  = sum(s.confidence for s in active_signals) / len(active_signals)
 
-        if   avg_conf > 0.55 and agreement >= 0.55 and edge > 0.05: conf = "high"
-        elif avg_conf > 0.30 and agreement >= 0.40 and edge > 0.02: conf = "medium"
-        else:                                                          conf = "low"
+        # Confidence logic:
+        # - High edge (>20%) overrides low confidence — too good to skip
+        # - Medium edge needs agreement
+        if edge >= 0.20 and direction != "NEUTRAL":
+            conf = "high"   # большой edge — входим всегда
+        elif avg_conf > 0.50 and agreement >= 0.55 and edge > 0.05:
+            conf = "high"
+        elif avg_conf > 0.28 and agreement >= 0.35 and edge > 0.02:
+            conf = "medium"
+        else:
+            conf = "low"
 
-        top3      = sorted(signals, key=lambda s: s.confidence*s.weight, reverse=True)[:3]
-        reasoning = " · ".join(f"{s.name}: {s.reasoning}" for s in top3 if s.reasoning)
+        top3 = sorted(active_signals, key=lambda s: s.confidence*s.weight, reverse=True)[:3]
+        reasoning = " · ".join(
+            f"[{s.name}] {s.reasoning[:80]}"
+            for s in top3
+            if s.reasoning and s.reasoning not in ("error", "insufficient history", "no Kalshi match")
+        )
 
         return EnsembleResult(
             final_score    = round(prob, 4),

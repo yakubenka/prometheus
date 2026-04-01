@@ -290,15 +290,21 @@ class Prometheus:
 
             if result.direction == "NEUTRAL":       continue
             if result.edge < cfg.min_edge:           continue
-            # В DRY RUN принимаем medium confidence тоже
-            if cfg.dry_run:
-                if result.confidence == "low":       continue
-            else:
-                if result.confidence == "low":       continue
+            # Большой edge (>20%) — входим даже при low confidence, но половина размера
+            if result.confidence == "low":
+                if result.edge >= 0.20:
+                    log.info(f"  High-edge override: edge={result.edge:.1%} confidence=low → entering with 50% size")
+                else:
+                    continue
 
             size     = self.risk.kelly_size(result.ai_probability,
                                             market.yes_price, result.direction,
                                             cfg.bankroll)
+            # Высокий edge но низкая уверенность — половина размера
+            if result.confidence == "low" and result.edge >= 0.20:
+                size = size * 0.5
+                log.info(f"  Reduced size (low confidence override): ${size:.2f}")
+
             decision = self.risk.check(market.id, size, list(market.tags))
             if not decision.allowed:
                 log.info(f"AI risk block: {decision.reason}")
