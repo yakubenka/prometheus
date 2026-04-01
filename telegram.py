@@ -59,63 +59,97 @@ class Telegram:
               size: float, edge: float, confidence: str,
               reasoning: str, dry_run: bool,
               signals: list = None) -> None:
-        icon = "📝" if dry_run else "💰"
-        tag  = "PAPER" if dry_run else "🔴 LIVE"
+
+        mode = "📋 PAPER" if dry_run else "⚡ LIVE"
+        dir_icon = "🟢 LONG" if direction == "YES" else "🔴 SHORT"
+        conf_icon = {"high": "🔥", "medium": "✅", "low": "⚡"}.get(confidence, "•")
+
+        # Ожидаемый профит если рынок резолвится в нашу пользу
+        if direction == "YES":
+            expected_win = round(size * (1/max(price, 0.01) - 1), 2)
+        else:
+            expected_win = round(size * (1/max(1-price, 0.01) - 1), 2)
+        expected_loss = size  # максимальная потеря
 
         lines = [
-            f"{icon} *{tag} — Новая позиция*",
+            f"{mode} TRADE",
+            f"{'─'*32}",
             f"",
-            f"*{question[:80]}*",
+            f"*{question}*",
             f"",
-            f"▸ Направление: *{direction}* @ `{price:.3f}`",
-            f"▸ Размер: *${size:.2f}* | Edge: *{edge:.1%}*",
-            f"▸ Уверенность: *{confidence}*",
+            f"{dir_icon}  `{price:.3f}`  →  size *${size:.2f}*",
+            f"",
+            f"📊 *Анализ:*",
+            f"  Edge:         *{edge:.1%}*",
+            f"  Уверенность:  {conf_icon} *{confidence.upper()}*",
+            f"  Потенциал:    +${expected_win:.2f} / −${expected_loss:.2f}",
+            f"  R/R:          *1:{round(expected_win/max(expected_loss,0.01), 1)}*",
         ]
 
-        # Reasoning от сигналов
+        # Сигналы — только значимые
         if signals:
-            lines.append(f"")
-            lines.append(f"🧠 *Почему открыли:*")
-            for s in signals:
-                if s.reasoning and s.reasoning not in ("error", "insufficient history", "no Kalshi match"):
-                    icon_s = "↑" if s.direction == "YES" else "↓" if s.direction == "NO" else "→"
-                    lines.append(f"`{s.name}` {icon_s} {s.reasoning[:100]}")
-        elif reasoning:
-            lines.append(f"")
-            lines.append(f"🧠 *Reasoning:*")
-            # Разбиваем reasoning на части если он содержит · разделители
-            parts = reasoning.split(" · ")
-            for part in parts[:3]:
-                if part.strip():
-                    lines.append(f"• {part.strip()[:120]}")
+            active = [s for s in signals
+                      if s.direction != "NEUTRAL"
+                      and s.reasoning
+                      and s.reasoning not in ("error", "insufficient history", "no Kalshi match", "no PredictIt match")]
+            if active:
+                lines.append(f"")
+                lines.append(f"🧠 *Почему вошли:*")
+                for s in active[:4]:
+                    arrow = "↑" if s.direction == "YES" else "↓"
+                    conf_pct = f"{s.confidence:.0%}"
+                    lines.append(f"  `{s.name:<12}` {arrow} {s.reasoning[:90]}")
+
+        # Ключевой вывод из reasoning
+        if reasoning:
+            key_parts = [p.strip() for p in reasoning.split("·") if p.strip() and "[" not in p]
+            if key_parts:
+                lines.append(f"")
+                lines.append(f"💡 *Ключевой тезис:*")
+                lines.append(f"  _{key_parts[0][:150]}_")
+
+        lines.append(f"")
+        lines.append(f"{'─'*32}")
 
         self.send("\n".join(lines))
 
     def smart_money(self, question: str, direction: str,
                     price: float, size: float, reasoning: str) -> None:
+        dir_icon = "🟢" if direction == "YES" else "🔴"
         self.send(
-            f"🔎 *Smart Money*\n"
-            f"{question[:65]}\n\n"
-            f"{direction} @ `{price:.3f}` | `${size:.2f}`\n"
-            f"_{reasoning[:120]}_"
+            f"🔎 *SMART MONEY SIGNAL*\n"
+            f"{'─'*28}\n\n"
+            f"*{question[:80]}*\n\n"
+            f"{dir_icon} *{direction}* @ `{price:.3f}` | *${size:.2f}*\n\n"
+            f"🧠 _{reasoning[:150]}_"
         )
 
     def closed(self, question: str, direction: str,
                outcome: str, pnl: float) -> None:
-        icon = "✅" if pnl >= 0 else "❌"
-        result = "WIN" if pnl >= 0 else "LOSS"
+        won = pnl >= 0
+        icon = "✅" if won else "❌"
+        result = "WIN" if won else "LOSS"
+        pnl_str = f"+${pnl:.2f}" if won else f"−${abs(pnl):.2f}"
         self.send(
-            f"{icon} *{result} — Позиция закрыта*\n\n"
+            f"{icon} *{result}*\n"
+            f"{'─'*28}\n\n"
             f"*{question[:80]}*\n\n"
-            f"▸ Ставка: *{direction}* → Исход: *{outcome}*\n"
-            f"▸ P&L: *${pnl:+.2f}*"
+            f"Ставка: *{direction}* → *{outcome}*\n"
+            f"P&L: *{pnl_str}*"
         )
 
     def arbitrage(self, title: str, content: str) -> None:
-        self.send(f"🎯 *Арбитраж*\n{title}\n_{content}_")
+        self.send(f"🎯 *АРБИТРАЖ*\n{'─'*28}\n\n{title}\n_{content}_")
 
     def breaking(self, items: list[str]) -> None:
-        lines = ["🚨 *Breaking Intel*"] + [f"• {i[:80]}" for i in items[:3]]
+        lines = [
+            "🚨 *BREAKING NEWS*",
+            f"{'─'*28}",
+            "_Запускаю внеочередной анализ рынков..._",
+            ""
+        ]
+        for i, item in enumerate(items[:3], 1):
+            lines.append(f"{i}. {item[:100]}")
         self.send("\n".join(lines))
 
     def limit_warning(self, pct: float) -> None:
