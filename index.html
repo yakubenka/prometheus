@@ -444,15 +444,19 @@ function fmtPos(p, showLink = true) {
   const url = pmURL(p);
   const cur = p.current_price && Math.abs((+p.current_price)-(+p.price)) > 0.005
     ? `  ·  now ${(+p.current_price).toFixed(3)}` : '';
-  return `<div class="pos" onclick="window.open('${url}','_blank')">
+  const opened = p.opened_at ? p.opened_at.substring(0,10) : '';
+  return `<div class="pos">
     <div class="pos-top">
-      <div class="pos-left">
-        <div class="sig-tags">${tag(p.direction||'—')}${(p.tags||[]).slice(0,2).map(tag).join('')}</div>
+      <div class="pos-left" onclick="window.open('${url}','_blank')">
+        <div class="sig-tags">${tag(p.direction||'—')}${(p.tags||[]).slice(0,2).map(tag).join('')}<span style="font-size:10px;color:rgba(255,255,255,.25)">${opened}</span></div>
         <div class="pos-q">${p.question||''}</div>
         <div class="pos-meta">$${(+p.size||0).toFixed(2)} @ ${(+p.price||0).toFixed(3)}${cur}</div>
         ${showLink ? '<div class="pos-link">↗ Search on Polymarket</div>' : ''}
       </div>
-      <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sgn(p.pnl||0)}</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
+        <div class="pos-pnl" style="color:${up?'#30d158':'#ff453a'}">${sgn(p.pnl||0)}</div>
+        <button onclick="closePos('${p.id||p.market_id||''}',event)" style="font-size:10px;font-weight:600;padding:4px 10px;border-radius:20px;border:1px solid rgba(255,69,58,.4);background:rgba(255,69,58,.1);color:#ff453a;cursor:pointer">Close</button>
+      </div>
     </div>
   </div>`;
 }
@@ -617,6 +621,22 @@ async function loadLearn() {
 }
 
 // ── Refresh ────────────────────────────────────────────────────────
+async function closePos(marketId, e) {
+  e.stopPropagation();
+  if (!marketId) { alert('No market ID'); return; }
+  if (!confirm('Close this position at current price?')) return;
+  try {
+    const r = await fetch(API + '/api/close_position', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json','X-API-Key':'prometheus-secret-2026'},
+      body: JSON.stringify({market_id: marketId})
+    });
+    const d = await r.json();
+    if (d.ok) { await loadPos(); await loadOV(); }
+    else alert('Error: ' + (d.error||'unknown'));
+  } catch(err) { alert('Failed: ' + err.message); }
+}
+
 async function refresh() {
   await Promise.allSettled([loadOV(), loadSig(), loadPos(), loadHist(), loadSM(), loadLearn()]);
 }

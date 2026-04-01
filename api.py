@@ -178,6 +178,57 @@ def signals(limit: int = 30):
 def positions():
     return store_get("positions") or {"open":[],"closed_today":[]}
 
+@app.post("/api/close_position")
+def close_position(request: Request):
+    """Закрыть позицию вручную из дашборда."""
+    import asyncio
+    body = asyncio.get_event_loop().run_until_complete(request.json())
+    market_id = body.get("market_id","")
+    if not market_id:
+        return {"ok": False, "error": "no market_id"}
+
+    pos_data = store_get("positions") or {"open":[], "closed_today":[], "history":[]}
+    open_pos  = pos_data.get("open", [])
+    found     = None
+
+    for p in open_pos:
+        if p.get("id") == market_id or p.get("market_id") == market_id:
+            found = p
+            break
+
+    if not found:
+        return {"ok": False, "error": "position not found"}
+
+    # Закрываем по текущей цене
+    cur_price = found.get("current_price") or found.get("price", 0)
+    entry     = found.get("price", 0)
+    size      = found.get("size", 0)
+    direction = found.get("direction","YES")
+
+    # P&L
+    if direction == "YES":
+        pnl = round((float(cur_price) - float(entry)) / max(float(entry), 0.01) * float(size), 2)
+    else:
+        pnl = round((float(entry) - float(cur_price)) / max(1 - float(entry), 0.01) * float(size), 2)
+
+    from datetime import datetime, timezone
+    found["status"]    = "closed"
+    found["closed_at"] = datetime.now(timezone.utc).isoformat()
+    found["exit_price"]= cur_price
+    found["pnl"]       = pnl
+
+    # Обновляем данные
+    new_open    = [p for p in open_pos if p.get("id") != market_id and p.get("market_id") != market_id]
+    history     = pos_data.get("history", [])
+    history.append(found)
+
+    pos_data["open"]         = new_open
+    pos_data["history"]      = history
+    pos_data["closed_today"] = pos_data.get("closed_today", []) + [found]
+    store_set("positions", pos_data)
+
+    return {"ok": True, "pnl": pnl}
+
 @app.get("/api/smart_money")
 def smart_money():
     return store_get("smart_money") or {"traders":[]}

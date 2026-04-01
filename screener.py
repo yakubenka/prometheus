@@ -129,13 +129,17 @@ def screen(markets: list[Market], top_n: int = 10) -> list[ScreenResult]:
         if market.spread > 0.05:
             continue
 
-        # Не входим если рынок закрывается через < 2 часа (матч уже идёт)
+        # Проверяем время до закрытия
         if market.end_date:
             try:
                 end = datetime.fromisoformat(market.end_date.replace("Z","+00:00"))
                 hours_left = (end - datetime.now(timezone.utc)).total_seconds() / 3600
+                days_left  = hours_left / 24
                 if hours_left < 2:
                     log.debug(f"  Skip — closes in {hours_left:.1f}h: {market.question[:40]}")
+                    continue
+                if days_left > 90:
+                    log.debug(f"  Skip — too far ({days_left:.0f}d): {market.question[:40]}")
                     continue
             except Exception:
                 pass
