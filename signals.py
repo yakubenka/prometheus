@@ -49,11 +49,12 @@ def _parse_ai_json(text: str) -> dict:
 
 class SignalEngine:
     DEFAULT_WEIGHTS = {
-        "sentiment":   0.30,
-        "momentum":    0.18,
-        "calibration": 0.26,
-        "consensus":   0.16,  # снижен — Kalshi не всегда доступен
-        "base_rate":   0.10,
+        "sentiment":   0.28,
+        "momentum":    0.16,
+        "calibration": 0.24,
+        "consensus":   0.14,
+        "predictit":   0.10,
+        "base_rate":   0.08,
     }
 
     def __init__(self, ai: Anthropic,
@@ -63,15 +64,17 @@ class SignalEngine:
         self.weights = dict(self.DEFAULT_WEIGHTS)
 
     def analyze(self, market: Market) -> EnsembleResult:
+        rich_ctx = _build_rich_context(market, self.intel)
         signals = [
-            self._sentiment(market),
+            self._sentiment(market, rich_ctx),
             self._momentum(market),
-            self._calibration(market),
+            self._calibration(market, rich_ctx),
             self._consensus(market),
-            self._base_rate(market),
+            self._predictit(market),
+            self._base_rate(market, rich_ctx),
         ]
         for s in signals:
-            s.weight = self.weights.get(s.name, 0.2)
+            s.weight = self.weights.get(s.name, 0.15)
         return self._ensemble(market, signals)
 
     # ── Signal 1: Sentiment ────────────────────────────────────────────────────
@@ -154,7 +157,25 @@ class SignalEngine:
         return Signal("consensus", kalshi, min(0.85, abs(spread)*7), "YES",
                       f"Kalshi {kalshi:.2%} > PM {market.yes_price:.2%} — PM underpriced")
 
-    # ── Signal 5: Base Rate ────────────────────────────────────────────────────
+    # ── Signal 5: PredictIt ───────────────────────────────────────────────────
+
+    def _predictit(self, market: Market) -> Signal:
+        """Арбитраж с PredictIt — третья платформа."""
+        try:
+            from predictit import arbitrage_signal
+            result = arbitrage_signal(market.question, market.yes_price)
+            if result is None:
+                return Signal("predictit", market.yes_price, 0.10, "NEUTRAL", "no PredictIt match")
+            if result["signal"] == "NEUTRAL":
+                return Signal("predictit", result["pi_price"], 0.50, "NEUTRAL", result["reasoning"])
+            conf = min(0.85, abs(result["gap"]) * 8)
+            direc = result["signal"]
+            return Signal("predictit", result["pi_price"], conf, direc, result["reasoning"])
+        except Exception as e:
+            log.debug(f"PredictIt signal: {e}")
+            return Signal("predictit", market.yes_price, 0.10, "NEUTRAL", "error")
+
+    # ── Signal 6: Base Rate ────────────────────────────────────────────────────
 
     def _base_rate(self, market: Market) -> Signal:
         prompt = (

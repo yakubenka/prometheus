@@ -22,6 +22,7 @@ from learning import LearningEngine
 from intel import IntelPipeline
 from intel_ext import ExtendedIntelPipeline
 from screener import screen
+from liquidity import is_market_liquid
 
 import logging
 log = logging.getLogger("prometheus.main")
@@ -115,6 +116,7 @@ class Prometheus:
         self._last_report_date: date | None     = None
         self._last_limit_warn:  float           = 0.0
         self._signal_history:   list            = []   # история сигналов для дашборда
+        self._last_breaking:    float           = 0.0  # время последнего breaking news цикла
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -138,6 +140,18 @@ class Prometheus:
                 self._run_intel()
                 self._check_risk_alerts()
                 self._trade_cycle()
+
+                # Breaking news триггер — проверяем каждый цикл
+                # Если есть горячая новость и прошло >3 мин с последнего breaking цикла
+                import time as _time
+                breaking = self.intel.breaking_news(hours=0.1)  # последние 6 минут
+                if breaking and (_time.time() - self._last_breaking) > 180:
+                    log.info(f"🚨 Breaking news detected! Triggering immediate cycle...")
+                    self.tg.breaking([dp.title for dp in breaking[:3]])
+                    self._resolve_positions()
+                    self._trade_cycle()
+                    self._last_breaking = _time.time()
+
                 self._sleep(cfg.scan_interval)
 
             except Exception as e:
@@ -311,6 +325,12 @@ class Prometheus:
                 continue
 
             price = market.yes_price if result.direction == "YES" else market.no_price
+
+            # Проверяем ликвидность order book
+            liquid, liq_reason = is_market_liquid(market, result.direction)
+            if not liquid:
+                log.info(f"  Liquidity block: {liq_reason}")
+                continue
 
             self.tg.trade(market.question, result.direction, price,
                           decision.size_usd, result.edge, result.confidence,
