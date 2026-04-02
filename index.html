@@ -88,6 +88,15 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
 .tab-lb{font-size:9px;font-weight:500;letter-spacing:.02em}
 .screen{display:none}
 .screen.active{display:block}
+
+/* Reset button */
+.reset-btn{display:flex;align-items:center;justify-content:center;gap:7px;margin:0 16px 10px;padding:13px;border-radius:14px;border:1px solid rgba(255,69,58,.3);background:rgba(255,69,58,.08);color:#ff453a;font-size:14px;font-weight:600;cursor:pointer;width:calc(100% - 32px);-webkit-tap-highlight-color:transparent;transition:background .15s}
+.reset-btn:active{background:rgba(255,69,58,.18)}
+.reset-btn.loading{opacity:.5;pointer-events:none}
+
+/* Toast */
+.toast{position:fixed;top:60px;left:50%;transform:translateX(-50%);background:rgba(30,30,30,.97);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 18px;font-size:13px;font-weight:500;z-index:99999;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap}
+.toast.show{opacity:1}
 </style>
 </head>
 <body>
@@ -162,6 +171,12 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
 
   <div class="sec">TOP SIGNAL NOW</div>
   <div class="card" id="top-signal"><div class="empty">Waiting for next cycle…</div></div>
+
+  <div class="sec">PAPER TRADING</div>
+  <button class="reset-btn" id="reset-btn" onclick="resetBalance()">
+    ↺ Reset Balance to $100
+  </button>
+
 </div>
 
 <div id="s-sig" class="screen">
@@ -246,6 +261,8 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
   </button>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script>
 const API='https://distinguished-wisdom-production-def2.up.railway.app';
 const POLL=10000;
@@ -277,6 +294,14 @@ function setLive(on){
   $('ltxt').textContent=on?'Live':'Mock';
 }
 
+function showToast(msg, ok=true){
+  const t=$('toast');
+  t.textContent=msg;
+  t.style.color=ok?'#30d158':'#ff453a';
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+
 function tick(){$('clock').textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
 tick();setInterval(tick,1000);
 
@@ -294,6 +319,33 @@ async function api(path){
   const r=await fetch(API+path,{signal:AbortSignal.timeout(6000)});
   if(!r.ok)throw new Error(r.status);
   return r.json();
+}
+
+async function resetBalance(){
+  const btn=$('reset-btn');
+  const apiKey=prompt('Enter API key to confirm reset:');
+  if(!apiKey)return;
+  btn.classList.add('loading');
+  btn.textContent='Resetting…';
+  try{
+    const r=await fetch(API+'/api/admin/reset',{
+      method:'POST',
+      headers:{'x-bot-key':apiKey},
+      signal:AbortSignal.timeout(8000)
+    });
+    const d=await r.json();
+    if(d.ok){
+      showToast('✓ Reset complete — balance $100.00');
+      await refresh();
+    }else{
+      showToast('Error: '+(d.detail||'unknown'), false);
+    }
+  }catch(err){
+    showToast('Failed: '+err.message, false);
+  }finally{
+    btn.classList.remove('loading');
+    btn.innerHTML='↺ Reset Balance to $100';
+  }
 }
 
 function drawChart(history){
