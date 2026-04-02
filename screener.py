@@ -18,6 +18,49 @@ log = logging.getLogger("prometheus.screener")
 _SESSION = requests.Session()
 _SESSION.headers["User-Agent"] = "Prometheus/3.0"
 
+# ── Sports blocker ─────────────────────────────────────────────────────────────
+
+_BLOCKED_TAGS = {
+    "sports", "sport",
+    "nfl", "nba", "mlb", "nhl", "ncaa", "ncaab", "ncaaf",
+    "soccer", "football", "basketball", "baseball", "hockey",
+    "tennis", "golf", "boxing", "mma", "ufc", "wrestling",
+    "olympics", "esports", "cricket", "rugby", "formula1", "f1",
+    "racing", "nascar", "cycling", "swimming", "athletics",
+}
+
+_BLOCKED_KEYWORDS = [
+    "super bowl", "world cup", "champions league", "nfl", "nba", "mlb", "nhl",
+    "ncaa", "playoff", "championship", "tournament bracket", "match winner",
+    "game winner", "season wins", "mvp award", "draft pick", "transfer",
+    "score in", "goals scored", "points scored", "yards ", "touchdowns",
+    "hat trick", "grand slam", "wimbledon", "us open", "masters ",
+    "world series", "stanley cup", "super league", "premier league",
+]
+
+
+def _is_sports_market(market: Market) -> bool:
+    """Возвращает True если рынок спортивный — блокируем."""
+    # Проверка по тегам
+    tags = getattr(market, "tags", []) or []
+    for tag in tags:
+        tag_str = tag.get("label", "").lower() if isinstance(tag, dict) else str(tag).lower()
+        if tag_str in _BLOCKED_TAGS:
+            return True
+
+    # Проверка по category
+    category = getattr(market, "category", "") or ""
+    if category.lower() in _BLOCKED_TAGS or "sport" in category.lower():
+        return True
+
+    # Проверка по заголовку рынка
+    question = (market.question or "").lower()
+    if any(kw in question for kw in _BLOCKED_KEYWORDS):
+        return True
+
+    return False
+
+# ── Screener dataclass ─────────────────────────────────────────────────────────
 
 @dataclass
 class ScreenResult:
@@ -125,6 +168,11 @@ def screen(markets: list[Market], top_n: int = 10) -> list[ScreenResult]:
     results = []
 
     for market in markets:
+        # Блокируем спортивные рынки
+        if _is_sports_market(market):
+            log.debug(f"  Skip sports — {market.question[:50]}")
+            continue
+
         # Пропускаем рынки с плохим спредом
         if market.spread > 0.05:
             continue

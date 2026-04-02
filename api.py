@@ -238,3 +238,48 @@ def learning():
 @app.get("/api/audit")
 def audit():
     return {"entries":[]}
+
+# ── Admin ──────────────────────────────────────────────────────────────────────
+
+@app.post("/api/admin/reset")
+def admin_reset(_=Depends(_bot_auth)):
+    """
+    Сброс paper trading состояния:
+    - bankroll → $100
+    - все P&L → 0
+    - все позиции и история → пусто
+    """
+    default_overview = {
+        "bot_running":       _alive(),
+        "dry_run":           True,
+        "pnl_today":         0.0,
+        "pnl_total":         0.0,
+        "win_rate":          0.0,
+        "total_trades":      0,
+        "open_positions":    0,
+        "open_exposure":     0.0,
+        "bankroll":          100.0,
+        "daily_loss_used":   0.0,
+        "signals_today":     0,
+        "smart_money_today": 0,
+    }
+    empty_positions = {
+        "open":         [],
+        "closed_today": [],
+        "history":      [],
+    }
+
+    store_set("overview",  default_overview)
+    store_set("positions", empty_positions)
+    store_set("signals",   {"_list": []})
+
+    # Сброс in-memory P&L
+    _mem["last_push"] = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "ok":      True,
+        "message": "Paper trading reset: balance=$100.00, all P&L and positions cleared",
+        "bankroll": 100.0,
+        "pnl_today": 0.0,
+        "pnl_total": 0.0,
+    }
