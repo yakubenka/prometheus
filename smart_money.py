@@ -1,14 +1,28 @@
 """
-Prometheus — Smart Money Tracker v3.1
-Находит инсайдеров и sharp-трейдеров по on-chain истории Polymarket.
+Prometheus — Smart Money Tracker v3.5
+Стратегия: найти инсайдеров → следить за ними → копировать их сделки
+как можно быстрее после того как они входят.
 
-FIXES v3.1:
-- _pnl() исправлен: win = outcome совпадает с side, не просто outcome==YES
-- win_rate исправлен: считает реальные выигрыши (BUY+YES или SELL+NO)
-- edges исправлен: считает от реальной позиции, а не всегда YES
-- WalletProfile.last_updated: datetime.now(timezone.utc) вместо utcnow()
-- _classify(): порог CONTRARIAN убран (слишком шумный класс)
-- scan(): known_wallets мониторинг теперь батчевый, не по одному
+АРХИТЕКТУРА:
+1. fetch_large_trades() → видим кто ставит $3k+ прямо сейчас
+2. enrich_trades_with_outcomes() → обогащаем историю кошелька реальными исходами
+   через Gamma API (рынок закрыт → берём финальную цену как outcome)
+3. WalletAnalyzer → строим профиль: WR, ROI, специализации, insider_score
+4. SmartMoneyMonitor.scan() → если известный инсайдер только что вошёл →
+   сигнал "копируй немедленно"
+
+КЛЮЧЕВАЯ ИДЕЯ:
+Инсайдер знает результат заранее → ставит на низкую вероятность (5-20%)
+→ рынок ещё не знает → у нас есть окно 5-30 мин чтобы войти рядом
+→ новость выходит → цена летит вверх → профит
+
+БАГ-ФИКСЫ v3.5:
+- enrich_trades_with_outcomes(): обогащаем сделки outcome через Gamma API
+  (решает проблему пустых resolved_trades)
+- Снижен MIN_RESOLVED с 10 до 5 (быстрее строим профили)
+- Добавлен SPEED_BONUS: чем раньше вошёл до движения цены — тем выше score
+- Insider detection улучшен: big_upset_score учитывает размер ставки
+- scan() теперь сортирует по времени (свежие сделки важнее)
 """
 from __future__ import annotations
 import logging
@@ -19,9 +33,20 @@ from enum import Enum
 from typing import Optional
 from collections import defaultdict
 
+import requests
+
 from data import Trade, fetch_wallet_trades, fetch_large_trades
 
 log = logging.getLogger("prometheus.smart_money")
+
+GAMMA = "https://gamma-api.polymarket.com"
+_S    = requests.Session()
+_S.headers["User-Agent"] = "Prometheus/3.0"
+
+# Кэш outcomes по market_id
+_OUTCOME_CACHE: dict[str, Optional[str]] = {}
+_OUTCOME_CACHE_TS: dict[str, float] = {}
+_OUTCOME_TTL = 3600  # 1 час
 
 
 class TraderClass(Enum):
@@ -49,7 +74,8 @@ class WalletProfile:
     insider_score:    float = 0.0
     sharp_score:      float = 0.0
     specializations:  list  = field(default_factory=list)
-    big_upsets:       int   = 0
+    big_upsets:       int   = 0       # выиграл когда рынок давал <20%
+    speed_score:      float = 0.0     # насколько рано входит до движения
     sample_size_ok:   bool  = False
     last_updated:     datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -66,11 +92,107 @@ class SmartSignal:
     strength:    float
     signal_type: str
     reasoning:   str
+    minutes_ago: float = 0.0   # как давно инсайдер вошёл
     timestamp:   datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+# ── Outcome enrichment ────────────────────────────────────────────────────────
+
+def _fetch_market_outcome(market_id: str) -> Optional[str]:
+    """
+    Получить outcome закрытого рынка через Gamma API.
+    YES если финальная цена >= 0.97, NO если <= 0.03.
+    Кэшируем на 1 час.
+    """
+    now = time.time()
+    if market_id in _OUTCOME_CACHE:
+        if now - _OUTCOME_CACHE_TS.get(market_id, 0) < _OUTCOME_TTL:
+            return _OUTCOME_CACHE[market_id]
+
+    try:
+        r = _S.get(f"{GAMMA}/markets/{market_id}", timeout=6)
+        if r.status_code != 200:
+            return None
+        m = r.json()
+
+        # Прямые поля резолюции
+        winner = m.get("winner") or m.get("resolvedOutcome") or m.get("resolution")
+        if winner:
+            w = str(winner).upper()
+            if w in ("YES", "1", "TRUE"):
+                _OUTCOME_CACHE[market_id] = "YES"
+                _OUTCOME_CACHE_TS[market_id] = now
+                return "YES"
+            if w in ("NO", "0", "FALSE"):
+                _OUTCOME_CACHE[market_id] = "NO"
+                _OUTCOME_CACHE_TS[market_id] = now
+                return "NO"
+
+        # По финальной цене
+        if m.get("closed") or not m.get("active", True):
+            prices = m.get("outcomePrices")
+            if isinstance(prices, str):
+                import json
+                prices = json.loads(prices)
+            if prices:
+                yes_price = float(prices[0])
+                if yes_price >= 0.97:
+                    result = "YES"
+                elif yes_price <= 0.03:
+                    result = "NO"
+                else:
+                    result = None
+                _OUTCOME_CACHE[market_id] = result
+                _OUTCOME_CACHE_TS[market_id] = now
+                return result
+
+        # Рынок ещё открыт
+        _OUTCOME_CACHE[market_id] = None
+        _OUTCOME_CACHE_TS[market_id] = now
+        return None
+
+    except Exception as e:
+        log.debug(f"fetch_market_outcome {market_id}: {e}")
+        return None
+
+
+def enrich_trades_with_outcomes(trades: list[Trade]) -> list[Trade]:
+    """
+    Обогащаем сделки реальными outcomes через Gamma API.
+    Это решает главную проблему: /activity API не возвращает outcome.
+    Батчим запросы — один запрос на уникальный market_id.
+    """
+    # Уникальные market_ids без outcome
+    missing = {t.market_id for t in trades
+               if t.outcome is None and t.market_id}
+
+    log.debug(f"Enriching outcomes for {len(missing)} markets...")
+
+    enriched_map: dict[str, Optional[str]] = {}
+    for mid in list(missing)[:50]:   # максимум 50 запросов
+        outcome = _fetch_market_outcome(mid)
+        if outcome:
+            enriched_map[mid] = outcome
+        time.sleep(0.05)  # 50ms между запросами
+
+    # Применяем outcomes
+    result = []
+    for t in trades:
+        if t.outcome is None and t.market_id in enriched_map:
+            # Trade frozen=True — создаём новый объект с outcome
+            from dataclasses import replace
+            t = replace(t, outcome=enriched_map[t.market_id])
+        result.append(t)
+
+    resolved = sum(1 for t in result if t.outcome is not None)
+    log.debug(f"Enrichment: {resolved}/{len(result)} trades have outcome")
+    return result
+
+
+# ── Wallet Analyzer ───────────────────────────────────────────────────────────
+
 class WalletAnalyzer:
-    MIN_RESOLVED = 10
+    MIN_RESOLVED = 5    # снижено с 10 — быстрее строим профили
     CACHE_TTL    = 3600
 
     def __init__(self) -> None:
@@ -80,9 +202,13 @@ class WalletAnalyzer:
         addr = address.lower()
         if not force and addr in self._cache:
             cached = self._cache[addr]
-            if (datetime.now(timezone.utc) - cached.last_updated).total_seconds() < self.CACHE_TTL:
+            age = (datetime.now(timezone.utc) - cached.last_updated).total_seconds()
+            if age < self.CACHE_TTL:
                 return cached
-        trades  = fetch_wallet_trades(addr)
+
+        trades  = fetch_wallet_trades(addr, limit=300)
+        # КЛЮЧЕВОЙ ФИКс: обогащаем outcomes через API
+        trades  = enrich_trades_with_outcomes(trades)
         profile = self._build(addr, trades)
         self._cache[addr] = profile
         return profile
@@ -99,10 +225,10 @@ class WalletAnalyzer:
         p.sample_size_ok  = len(resolved) >= self.MIN_RESOLVED
 
         if not resolved:
+            log.debug(f"  {address[:10]}… — 0 resolved trades (API missing outcomes)")
             return p
 
-        # FIX: win = direction matches outcome
-        # BUY means they bet YES, SELL means they bet NO
+        # Win rate: BUY+YES или SELL+NO
         wins = [
             t for t in resolved
             if (t.side == "BUY"  and t.outcome == "YES") or
@@ -114,45 +240,50 @@ class WalletAnalyzer:
         vol_res   = sum(t.size for t in resolved)
         p.roi     = total_pnl / vol_res if vol_res > 0 else 0.0
 
-        # FIX: edge = how far price was from actual outcome at time of trade
         edges = []
         for t in resolved:
-            actual = 1.0 if t.outcome == "YES" else 0.0
+            actual      = 1.0 if t.outcome == "YES" else 0.0
             trade_price = t.price if t.side == "BUY" else 1.0 - t.price
             edges.append(abs(actual - trade_price))
         p.avg_edge = sum(edges) / len(edges) if edges else 0
 
         p.calibration     = self._calibration(resolved)
         p.specializations = self._specializations(resolved)
-        p.big_upsets      = sum(
-            1 for t in resolved
-            if t.price < 0.25 and t.size > 2000
-            and t.side == "BUY" and t.outcome == "YES"
-        )
-        p.insider_score  = self._insider_score(p, resolved)
-        p.sharp_score    = self._sharp_score(p)
-        p.trader_class   = self._classify(p)
-        p.last_updated   = datetime.now(timezone.utc)
 
-        log.info(f"  Wallet {address[:10]}… | {p.trader_class.value} | "
-                 f"WR={p.win_rate:.1%} ROI={p.roi:.1%} n={p.resolved_trades}")
+        # Big upsets: выиграл когда рынок давал <= 20% — признак инсайдера
+        p.big_upsets = sum(
+            1 for t in resolved
+            if t.price <= 0.20
+            and t.size >= 1000
+            and t.side == "BUY"
+            and t.outcome == "YES"
+        )
+
+        # Speed score: как рано входит до движения рынка
+        p.speed_score     = self._speed_score(resolved)
+        p.insider_score   = self._insider_score(p, resolved)
+        p.sharp_score     = self._sharp_score(p)
+        p.trader_class    = self._classify(p)
+        p.last_updated    = datetime.now(timezone.utc)
+
+        log.info(
+            f"  Wallet {address[:10]}… | {p.trader_class.value} | "
+            f"WR={p.win_rate:.1%} ROI={p.roi:.1%} "
+            f"n={p.resolved_trades}/{p.total_trades} "
+            f"upsets={p.big_upsets}"
+        )
         return p
 
     def _pnl(self, t: Trade) -> float:
-        """P&L по сделке. BUY=YES bet, SELL=NO bet."""
         if t.side == "BUY":
-            # Купил YES токен по цене t.price
             if t.outcome == "YES":
                 return t.size * ((1.0 / max(t.price, 0.01)) - 1)
-            else:
-                return -t.size
+            return -t.size
         else:
-            # Купил NO токен по цене (1 - t.price)
             no_price = 1.0 - t.price
             if t.outcome == "NO":
                 return t.size * ((1.0 / max(no_price, 0.01)) - 1)
-            else:
-                return -t.size
+            return -t.size
 
     def _calibration(self, trades: list[Trade]) -> float:
         buckets: dict[float, list[bool]] = defaultdict(list)
@@ -170,33 +301,58 @@ class WalletAnalyzer:
 
     def _specializations(self, trades: list[Trade]) -> list[str]:
         DOMAINS = {
-            "geopolitics": ["iran","israel","russia","ukraine","china","war","attack"],
-            "politics":    ["election","president","congress","vote","trump"],
-            "macro":       ["fed","rate","inflation","cpi","gdp","fomc","recession"],
-            "crypto":      ["bitcoin","btc","eth","crypto","solana"],
+            "geopolitics": ["iran","israel","russia","ukraine","china","war","attack","military","nato"],
+            "politics":    ["election","president","congress","vote","trump","senate","democrat"],
+            "macro":       ["fed","rate","inflation","cpi","gdp","fomc","recession","treasury"],
+            "crypto":      ["bitcoin","btc","eth","crypto","solana","defi","binance"],
         }
         results: dict[str, list[bool]] = defaultdict(list)
         for t in trades:
             q   = t.question.lower()
-            won = (t.side == "BUY" and t.outcome == "YES") or \
+            won = (t.side == "BUY"  and t.outcome == "YES") or \
                   (t.side == "SELL" and t.outcome == "NO")
             for domain, kws in DOMAINS.items():
                 if any(kw in q for kw in kws):
                     results[domain].append(won)
-        return [d for d, r in results.items()
-                if len(r) >= 3 and sum(r)/len(r) > 0.65]
+        return [
+            d for d, r in results.items()
+            if len(r) >= 3 and sum(r)/len(r) > 0.60
+        ]
+
+    def _speed_score(self, trades: list[Trade]) -> float:
+        """
+        Насколько рано трейдер входит до движения цены.
+        Высокий score = входит когда цена ещё низкая → инсайдер.
+        """
+        early_wins = sum(
+            1 for t in trades
+            if t.price <= 0.25
+            and t.side == "BUY"
+            and t.outcome == "YES"
+        )
+        if not trades:
+            return 0.0
+        return min(1.0, early_wins / max(len(trades) * 0.1, 1))
 
     def _insider_score(self, p: WalletProfile, trades: list[Trade]) -> float:
         if not p.sample_size_ok:
             return 0.0
         score = 0.0
-        if p.win_rate > 0.80:  score += 0.30
-        elif p.win_rate > 0.70: score += 0.15
-        if {"geopolitics","politics"} & set(p.specializations): score += 0.20
-        if p.big_upsets >= 3:  score += 0.30
-        elif p.big_upsets >= 1: score += 0.15
-        if p.total_volume > 100_000: score += 0.15
-        elif p.total_volume > 30_000: score += 0.08
+        # Win rate
+        if p.win_rate > 0.80:   score += 0.25
+        elif p.win_rate > 0.70: score += 0.12
+        # Специализация в geo/politics — классические инсайдерские домены
+        if {"geopolitics", "politics"} & set(p.specializations):
+            score += 0.20
+        # Big upsets — ключевой признак инсайдера
+        if p.big_upsets >= 5:   score += 0.30
+        elif p.big_upsets >= 3: score += 0.20
+        elif p.big_upsets >= 1: score += 0.10
+        # Speed score — входит рано
+        score += p.speed_score * 0.15
+        # Объём — инсайдеры ставят серьёзные деньги
+        if p.total_volume > 200_000: score += 0.15
+        elif p.total_volume > 50_000: score += 0.08
         return min(1.0, score)
 
     def _sharp_score(self, p: WalletProfile) -> float:
@@ -205,31 +361,36 @@ class WalletAnalyzer:
         score = 0.0
         if p.roi > 0.20:    score += 0.30
         elif p.roi > 0.08:  score += 0.15
-        if p.calibration > 0.75: score += 0.25
+        if p.calibration > 0.75:  score += 0.25
         elif p.calibration > 0.55: score += 0.12
-        if p.win_rate > 0.62 and p.resolved_trades >= 20: score += 0.25
-        elif p.win_rate > 0.58 and p.resolved_trades >= 10: score += 0.12
+        if p.win_rate > 0.62 and p.resolved_trades >= 15: score += 0.25
+        elif p.win_rate > 0.58 and p.resolved_trades >= 5: score += 0.12
         if p.total_volume > 50_000: score += 0.12
         elif p.total_volume > 15_000: score += 0.06
         return min(1.0, score)
 
     def _classify(self, p: WalletProfile) -> TraderClass:
-        if not p.sample_size_ok:             return TraderClass.NOISE
-        if p.insider_score >= 0.55:          return TraderClass.INSIDER
-        if p.sharp_score >= 0.50 and p.roi > 0.05: return TraderClass.SHARP
-        # CONTRARIAN требует строгих условий — высокий win_rate И большой edge
-        if p.win_rate > 0.65 and p.avg_edge > 0.35 and p.resolved_trades >= 15:
+        if not p.sample_size_ok:
+            return TraderClass.NOISE
+        if p.insider_score >= 0.45:
+            return TraderClass.INSIDER
+        if p.sharp_score >= 0.50 and p.roi > 0.05:
+            return TraderClass.SHARP
+        if p.win_rate > 0.65 and p.avg_edge > 0.35 and p.resolved_trades >= 10:
             return TraderClass.CONTRARIAN
         return TraderClass.NOISE
 
+
+# ── Smart Money Monitor ───────────────────────────────────────────────────────
 
 class SmartMoneyMonitor:
     MAX_SIGNALS = 5
 
     def __init__(self, max_position_usd: float = 20.0) -> None:
-        self.analyzer         = WalletAnalyzer()
-        self.max_position_usd = max_position_usd
-        self.known_wallets:   dict[str, WalletProfile] = {}
+        self.analyzer          = WalletAnalyzer()
+        self.max_position_usd  = max_position_usd
+        self.known_wallets:    dict[str, WalletProfile] = {}
+        self._total_scanned:   int = 0
 
     def scan(self) -> list[SmartSignal]:
         log.info("🔍 Smart Money скан...")
@@ -238,36 +399,56 @@ class SmartMoneyMonitor:
 
         large   = fetch_large_trades(min_size=3000, hours_back=6)
         unusual = [t for t in large if t.is_unusual]
+        self._total_scanned += len(unusual)
         log.info(f"Необычных сделок: {len(unusual)} из {len(large)}")
+
+        # Сортируем по времени — свежие сделки важнее
+        unusual.sort(key=lambda t: t.timestamp, reverse=True)
 
         for trade in unusual:
             if not trade.maker or trade.maker in seen:
                 continue
             seen.add(trade.maker)
+
             profile = self.analyzer.analyze(trade.maker)
             self.known_wallets[trade.maker] = profile
+
             if profile.trader_class == TraderClass.NOISE:
                 continue
-            sig = self._make_signal(trade, profile)
+
+            minutes_ago = (
+                datetime.now(timezone.utc) - trade.timestamp
+            ).total_seconds() / 60
+
+            sig = self._make_signal(trade, profile, minutes_ago)
             if sig:
                 signals.append(sig)
+                log.info(
+                    f"  🎯 {profile.trader_class.emoji} {profile.trader_class.value} "
+                    f"| {trade.question[:50]} "
+                    f"| {sig.direction} ${trade.size:,.0f} "
+                    f"| {minutes_ago:.0f}min ago"
+                )
 
-        # Мониторим известных трейдеров — только не-noise, не виденных выше
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=6)
+        # Мониторим известных инсайдеров и sharp трейдеров
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
         for addr, profile in list(self.known_wallets.items()):
             if profile.trader_class == TraderClass.NOISE or addr in seen:
                 continue
-            recent_trades = fetch_wallet_trades(addr, limit=10)
-            for trade in recent_trades:
-                if trade.timestamp < cutoff or trade.size < 1000:
+            recent = fetch_wallet_trades(addr, limit=5)
+            for trade in recent:
+                if trade.timestamp < cutoff or trade.size < 500:
                     continue
-                sig = self._make_signal(trade, profile)
+                minutes_ago = (
+                    datetime.now(timezone.utc) - trade.timestamp
+                ).total_seconds() / 60
+                sig = self._make_signal(trade, profile, minutes_ago)
                 if sig:
                     signals.append(sig)
 
-        # Дедупликация + сортировка
+        # Дедупликация + сортировка по силе сигнала
         seen_mkts: set[str] = set()
-        unique:    list[SmartSignal] = []
+        unique: list[SmartSignal] = []
         for s in sorted(signals, key=lambda x: x.strength, reverse=True):
             key = f"{s.market_id}_{s.direction}"
             if key not in seen_mkts:
@@ -279,46 +460,98 @@ class SmartMoneyMonitor:
         log.info(f"Smart Money сигналов: {len(unique)}")
         return unique
 
-    def _make_signal(self, trade: Trade,
-                     profile: WalletProfile) -> Optional[SmartSignal]:
-        strength = self._strength(trade, profile)
-        min_str  = 0.55 if profile.trader_class == TraderClass.INSIDER else 0.60
+    def _make_signal(
+        self,
+        trade:       Trade,
+        profile:     WalletProfile,
+        minutes_ago: float = 0.0,
+    ) -> Optional[SmartSignal]:
+
+        strength = self._strength(trade, profile, minutes_ago)
+
+        # Insiders — порог ниже, хотим следовать им быстрее
+        min_str = 0.45 if profile.trader_class == TraderClass.INSIDER else 0.55
+
         if strength < min_str:
             return None
 
         direction = "YES" if trade.side == "BUY" else "NO"
         our_size  = round(min(self.max_position_usd * strength, self.max_position_usd), 2)
-        stype     = (
+
+        stype = (
             "insider_bet"  if profile.trader_class == TraderClass.INSIDER else
             "sharp_follow" if profile.trader_class == TraderClass.SHARP   else
             "contrarian"
         )
-        reasoning = (
-            f"{profile.trader_class.emoji} {profile.trader_class.value} | "
-            f"WR {profile.win_rate:.0%} ROI {profile.roi:+.0%} "
-            f"({profile.resolved_trades} trades) | "
-            f"${trade.size:,.0f} @ {trade.price:.2%}"
+
+        # Формируем reasoning
+        urgency = ""
+        if minutes_ago < 5:
+            urgency = " 🔥 ТОЛЬКО ЧТО"
+        elif minutes_ago < 15:
+            urgency = f" ⚡ {minutes_ago:.0f} мин назад"
+        else:
+            urgency = f" · {minutes_ago:.0f} мин назад"
+
+        domains_str = (
+            f" | {', '.join(profile.specializations)}"
+            if profile.specializations else ""
         )
-        if profile.specializations:
-            reasoning += f" | {', '.join(profile.specializations)}"
+
+        reasoning = (
+            f"{profile.trader_class.emoji} {profile.trader_class.value.upper()}{urgency}\n"
+            f"WR {profile.win_rate:.0%}  ROI {profile.roi:+.0%}  "
+            f"({profile.resolved_trades} resolved){domains_str}\n"
+            f"${trade.size:,.0f} @ {trade.price:.2%}"
+            + (f"  · {profile.big_upsets} big upsets" if profile.big_upsets else "")
+        )
 
         return SmartSignal(
-            wallet=profile, market_id=trade.market_id, question=trade.question,
-            direction=direction, entry_price=trade.price,
-            their_size=trade.size, our_size=our_size,
-            strength=strength, signal_type=stype, reasoning=reasoning,
+            wallet      = profile,
+            market_id   = trade.market_id,
+            question    = trade.question,
+            direction   = direction,
+            entry_price = trade.price,
+            their_size  = trade.size,
+            our_size    = our_size,
+            strength    = strength,
+            signal_type = stype,
+            reasoning   = reasoning,
+            minutes_ago = minutes_ago,
         )
 
-    def _strength(self, trade: Trade, profile: WalletProfile) -> float:
+    def _strength(
+        self,
+        trade:       Trade,
+        profile:     WalletProfile,
+        minutes_ago: float = 0.0,
+    ) -> float:
         s = 0.0
+
+        # База по классу
         if profile.trader_class == TraderClass.INSIDER:    s += 0.40
         elif profile.trader_class == TraderClass.SHARP:    s += 0.28
         elif profile.trader_class == TraderClass.CONTRARIAN: s += 0.18
-        if profile.win_rate > 0.75:  s += 0.20
-        elif profile.win_rate > 0.65: s += 0.10
-        if trade.size > 50_000:  s += 0.20
+
+        # Win rate
+        if profile.win_rate > 0.80:   s += 0.20
+        elif profile.win_rate > 0.70: s += 0.12
+        elif profile.win_rate > 0.60: s += 0.06
+
+        # Размер сделки — большая ставка = больше уверенность
+        if trade.size > 100_000: s += 0.25
+        elif trade.size > 50_000: s += 0.20
         elif trade.size > 20_000: s += 0.15
         elif trade.size > 5_000:  s += 0.08
-        if trade.is_unusual:     s += 0.12
+
+        # Insider score
         s += profile.insider_score * 0.15
-        return min(1.0, s)
+
+        # SPEED PENALTY: чем старше сделка тем меньше смысл копировать
+        # Рынок уже мог переоцениться
+        if minutes_ago < 5:    s += 0.10   # бонус за свежесть
+        elif minutes_ago < 15: s += 0.05
+        elif minutes_ago > 60: s -= 0.10   # штраф за опоздание
+        elif minutes_ago > 120: s -= 0.20  # серьёзный штраф
+
+        return min(1.0, max(0.0, s))

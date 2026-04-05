@@ -72,14 +72,14 @@ class PositionResolver:
         if not self.tg:
             return
         try:
-            # Строим URL по slug позиции
+            # Строим URL - используем /?s= поиск который никогда не 404
             import urllib.parse as _up
             slug = getattr(pos, 'slug', None)
             if slug:
                 pm_url = f"https://polymarket.com/event/{slug}"
             else:
-                words  = ' '.join((pos.question or '').split()[:6])
-                pm_url = f"https://polymarket.com/markets?_s={_up.quote(words)}"
+                q      = _up.quote((pos.question or '')[:100])
+                pm_url = f"https://polymarket.com/?s={q}"
 
             if hasattr(self.tg, "position_closed"):
                 self.tg.position_closed(

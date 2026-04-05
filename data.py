@@ -63,19 +63,24 @@ class Market:
     @property
     def polymarket_url(self) -> str:
         """
-        Прямая ссылка на рынок Polymarket.
-        Форматы (в порядке приоритета):
-          1. polymarket.com/event/{groupSlug}   — если есть groupSlug
-          2. polymarket.com/markets/{conditionId} — если есть conditionId
-          3. polymarket.com/markets?_s={query}  — fallback поиск
+        Ссылка на рынок Polymarket.
+
+        Polymarket URL структура:
+        - /event/{eventSlug}  — страница события. НО: Gamma API возвращает
+          marketSlug который отличается от eventSlug → часто 404.
+        - /?s={query}         — поиск. НИКОГДА не даёт 404, всегда находит рынок.
+
+        Используем поиск по полному названию вопроса — это надёжнее.
+        Если slug есть — пробуем /event/ первым, но это не гарантия.
         """
         import urllib.parse
+        # Поиск по полному вопросу — никогда не 404
+        q = urllib.parse.quote(self.question[:100])
+        search_url = f"https://polymarket.com/?s={q}"
+        # Если есть slug — используем /event/ (может дать 404, но чаще работает)
         if self.slug:
             return f"https://polymarket.com/event/{self.slug}"
-        # Fallback: поиск по ключевым словам
-        words = ' '.join(self.question.split()[:6])
-        q = urllib.parse.quote(words)
-        return f"https://polymarket.com/markets?_s={q}"
+        return search_url
 
     @staticmethod
     def _make_slug(question: str) -> str:
@@ -279,17 +284,16 @@ def _parse_market(m: dict) -> Optional[Market]:
         text = (m.get("question") or "") + " " + (m.get("description") or "")
         tags = _extract_tags(text.lower())
 
-        # Polymarket URL structure:
-        # /event/{groupSlug}   — страница события (лучший вариант)
-        # /markets/{conditionId} — прямая ссылка на рынок
-        # Берём groupSlug в приоритете, иначе marketSlug/slug
+        # Собираем все возможные slug поля из Gamma API
+        # groupSlug — slug родительского события (наиболее точный для /event/)
+        # marketSlug — slug самого рынка
+        # slug — общее поле
         slug = (
             m.get("groupSlug") or
             m.get("marketSlug") or
             m.get("slug") or
             None
         )
-        condition_id = str(m.get("conditionId") or m.get("id") or "")
 
         return Market(
             id           = str(m.get("id") or m.get("conditionId") or ""),

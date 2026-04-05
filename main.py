@@ -283,8 +283,7 @@ class Prometheus:
                 sm_trades += 1
                 # Строим URL для Smart Money сигнала
                 import urllib.parse as _up
-                _sm_words = ' '.join(sig.question.split()[:6])
-                _sm_url   = f"https://polymarket.com/markets?_s={_up.quote(_sm_words)}"
+                _sm_url = f"https://polymarket.com/?s={_up.quote(sig.question[:100])}"
                 self.tg.position_opened(
                     question    = sig.question,
                     direction   = sig.direction,
