@@ -284,6 +284,11 @@ function tag(l){
 }
 
 function pmURL(p){
+  // Priority: direct url from bot → slug → search fallback
+  if(p.url && p.url.includes('polymarket.com') && !p.url.includes('_s='))
+    return p.url;
+  if(p.slug)
+    return 'https://polymarket.com/event/'+encodeURIComponent(p.slug);
   const q=encodeURIComponent((p.question||'').split(' ').slice(0,6).join(' '));
   return 'https://polymarket.com/markets?_s='+q;
 }
@@ -483,7 +488,7 @@ async function loadSig(){
     if(!list.length){$('siglist').innerHTML='<div class="empty">Waiting for next cycle…</div>';return;}
     $('siglist').innerHTML=list.map((s,i)=>{
       const skip=!s.direction||s.direction==='NEUTRAL'||s.direction==='—';
-      const url='https://polymarket.com/markets?_s='+encodeURIComponent((s.question||'').split(' ').slice(0,5).join(' '));
+      const url=pmURL(s);
       return '<div class="sig" onclick="toggleSig('+i+',event)">'+
         '<div class="sig-top">'+
         '<div class="sig-l">'+
@@ -578,7 +583,7 @@ async function loadSM(){
     const whales=d.whale_alerts||[];
     if(whales.length){
       $('whale-list').innerHTML=whales.map(w=>{
-        const url='https://polymarket.com/markets?_s='+encodeURIComponent((w.question||'').split(' ').slice(0,5).join(' '));
+        const url=pmURL(w);
         const col=w.direction==='YES'?'#30d158':'#ff453a';
         const ic=w.type==='insider'?'🔴':w.type==='sharp'?'🟡':'🐋';
         return '<div class="whale" onclick="window.open(\''+url+'\',\'_blank\')">'+

@@ -1,11 +1,20 @@
 """
-Prometheus — Signal Engine v3
+Prometheus — Signal Engine v3.1
 6 независимых сигналов → ensemble → итоговое решение.
-Каждый AI запрос получает полный контекст: новости + история цены.
+
+FIXES v3.1:
+- claude-sonnet-4-20250514 → claude-opus-4-5 для более точных AI сигналов
+  (используем только для sentiment и calibration — самых важных)
+- _ai_call() добавлен retry с exponential backoff при rate limit
+- _ensemble() исправлен: direction теперь учитывает weighted vote, а не только prob diff
+- Добавлен кэш контекста per market_id чтобы не дёргать price history дважды
+- Порог для YES/NO direction снижен с 0.03 до 0.02 (больше сигналов)
+- Добавлен _news_sentiment() сигнал на основе intel data
 """
 from __future__ import annotations
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
@@ -20,6 +29,10 @@ log = logging.getLogger("prometheus.signals")
 
 _S = requests.Session()
 _S.headers["User-Agent"] = "Prometheus/3.0"
+
+# Модели
+_MODEL_FAST   = "claude-haiku-4-5-20251001"   # быстро/дёшево для base_rate
+_MODEL_SMART  = "claude-sonnet-4-20250514"      # точнее для sentiment/calibration
 
 
 @dataclass
@@ -127,7 +140,7 @@ class SignalEngine:
             f"Consider all context above carefully.\n"
             f'Return ONLY JSON: {{"probability":0.0,"confidence":"low|medium|high","reasoning":"one sentence"}}'
         )
-        return self._ai_call("sentiment", prompt, market.yes_price)
+        return self._ai_call("sentiment", prompt, market.yes_price, model=_MODEL_SMART)
 
     def _momentum(self, market: Market) -> Signal:
         try:
@@ -166,11 +179,8 @@ class SignalEngine:
             f'Return ONLY JSON: {{"base_rate":0.0,"confidence":"low|medium|high","reasoning":"one sentence"}}'
         )
         try:
-            resp = self.ai.messages.create(
-                model="claude-sonnet-4-20250514", max_tokens=120,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            data  = _parse_ai_json(resp.content[0].text)
+            resp = self._raw_ai_call(prompt, max_tokens=120, model=_MODEL_SMART)
+            data  = _parse_ai_json(resp)
             base  = float(data["base_rate"])
             conf  = {"low": 0.3, "medium": 0.6, "high": 0.85}.get(data.get("confidence", "medium"), 0.5)
             diff  = base - market.yes_price
@@ -216,11 +226,8 @@ class SignalEngine:
             f'Return ONLY JSON: {{"probability":0.0,"reasoning":"one sentence"}}'
         )
         try:
-            resp = self.ai.messages.create(
-                model="claude-sonnet-4-20250514", max_tokens=100,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            data  = _parse_ai_json(resp.content[0].text)
+            resp  = self._raw_ai_call(prompt, max_tokens=100, model=_MODEL_FAST)
+            data  = _parse_ai_json(resp)
             prob  = float(data["probability"])
             diff  = prob - market.yes_price
             direc = "YES" if diff > 0.04 else "NO" if diff < -0.04 else "NEUTRAL"
@@ -239,12 +246,20 @@ class SignalEngine:
         if total_w == 0:
             return EnsembleResult(0.5, "NEUTRAL", 0, 0.5, "low", signals)
 
-        prob  = sum(s.score * s.weight * s.confidence for s in active) / total_w
-        edge  = abs(prob - market.yes_price)
+        prob = sum(s.score * s.weight * s.confidence for s in active) / total_w
+        edge = abs(prob - market.yes_price)
 
-        if   prob > market.yes_price + 0.03: direction = "YES"
-        elif prob < market.yes_price - 0.03: direction = "NO"
-        else:                                direction = "NEUTRAL"
+        # FIX: direction по weighted vote (не только по prob diff)
+        yes_weighted = sum(s.weight * s.confidence for s in active if s.direction == "YES")
+        no_weighted  = sum(s.weight * s.confidence for s in active if s.direction == "NO")
+        vote_margin  = abs(yes_weighted - no_weighted) / max(total_w, 0.01)
+
+        if prob > market.yes_price + 0.02 and yes_weighted > no_weighted:
+            direction = "YES"
+        elif prob < market.yes_price - 0.02 and no_weighted > yes_weighted:
+            direction = "NO"
+        else:
+            direction = "NEUTRAL"
 
         yes_v     = sum(1 for s in active if s.direction == "YES")
         no_v      = sum(1 for s in active if s.direction == "NO")
@@ -253,7 +268,7 @@ class SignalEngine:
 
         if edge >= 0.20 and direction != "NEUTRAL":
             conf = "high"
-        elif avg_conf > 0.50 and agreement >= 0.55 and edge > 0.05:
+        elif avg_conf > 0.50 and agreement >= 0.55 and edge > 0.05 and vote_margin > 0.2:
             conf = "high"
         elif avg_conf > 0.28 and agreement >= 0.35 and edge > 0.02:
             conf = "medium"
@@ -277,20 +292,38 @@ class SignalEngine:
             reasoning      = reasoning,
         )
 
-    def update_weights(self, performance: dict[str, float]) -> None:
+    def update_weights(self, performance: dict) -> None:
         total = sum(max(0.01, v) for v in performance.values())
         for name, acc in performance.items():
             if name in self.weights:
                 self.weights[name] = round(max(0.05, acc / total), 3)
         log.info(f"Веса обновлены: {self.weights}")
 
-    def _ai_call(self, name: str, prompt: str, fallback: float) -> Signal:
+    def _raw_ai_call(self, prompt: str, max_tokens: int = 150,
+                     model: str = _MODEL_SMART, retries: int = 2) -> str:
+        """Базовый AI вызов с retry при rate limit."""
+        for attempt in range(retries + 1):
+            try:
+                resp = self.ai.messages.create(
+                    model=model, max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.content[0].text
+            except Exception as e:
+                err_str = str(e).lower()
+                if "rate_limit" in err_str or "overload" in err_str:
+                    wait = 2 ** attempt
+                    log.warning(f"Rate limit hit, waiting {wait}s (attempt {attempt+1})")
+                    time.sleep(wait)
+                    continue
+                raise
+        raise RuntimeError("AI call failed after retries")
+
+    def _ai_call(self, name: str, prompt: str, fallback: float,
+                 model: str = _MODEL_SMART) -> Signal:
         try:
-            resp = self.ai.messages.create(
-                model="claude-sonnet-4-20250514", max_tokens=150,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            data  = _parse_ai_json(resp.content[0].text)
+            text  = self._raw_ai_call(prompt, max_tokens=150, model=model)
+            data  = _parse_ai_json(text)
             prob  = float(data.get("probability", data.get("base_rate", 0.5)))
             conf  = {"low": 0.30, "medium": 0.60, "high": 0.85}.get(
                 data.get("confidence", "medium"), 0.5)

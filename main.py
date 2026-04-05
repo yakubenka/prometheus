@@ -105,7 +105,7 @@ class Prometheus:
         )
         self.signals   = SignalEngine(self.ai, self.intel)
         self.sm        = SmartMoneyMonitor(cfg.max_pos_usd)
-        self.resolver  = PositionResolver(self.risk, self.tg.send)
+        self.resolver  = PositionResolver(self.risk, self.tg)
         self.learning  = LearningEngine(cfg.logs_dir)
 
         # State
@@ -118,6 +118,7 @@ class Prometheus:
         self._signal_history:   list            = []   # история сигналов для дашборда
         self._last_breaking:    float           = 0.0  # время последнего breaking news цикла
         self._whale_alerts:     list            = []   # крупные необычные сделки
+        self._market_signals:   dict            = {}   # market_id → list[Signal] для learning
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -144,14 +145,13 @@ class Prometheus:
 
                 # Breaking news триггер — проверяем каждый цикл
                 # Если есть горячая новость и прошло >3 мин с последнего breaking цикла
-                import time as _time
                 breaking = self.intel.breaking_news(hours=0.1)  # последние 6 минут
-                if breaking and (_time.time() - self._last_breaking) > 180:
+                if breaking and (time.time() - self._last_breaking) > 180:
                     log.info(f"🚨 Breaking news detected! Triggering immediate cycle...")
                     self.tg.breaking([dp.title for dp in breaking[:3]])
                     self._resolve_positions()
                     self._trade_cycle()
-                    self._last_breaking = _time.time()
+                    self._last_breaking = time.time()
 
                 self._sleep(cfg.scan_interval)
 
@@ -168,9 +168,11 @@ class Prometheus:
     def _resolve_positions(self) -> None:
         closed = self.resolver.run()
         for c in closed:
+            # Получаем сохранённые сигналы по market_id (если есть)
+            saved_signals = self._market_signals.get(c["market_id"], [])
             new_weights = self.learning.record(
                 market_id      = c["market_id"],
-                signals        = [],
+                signals        = saved_signals,
                 direction      = c["direction"],
                 market_price   = c["entry_price"],
                 actual_outcome = c["outcome"],
@@ -179,6 +181,8 @@ class Prometheus:
             if new_weights:
                 self.signals.update_weights(new_weights)
                 self.tg.weights_updated(new_weights)
+            # Чистим после использования
+            self._market_signals.pop(c["market_id"], None)
 
     def _run_intel(self) -> None:
         now = datetime.now(timezone.utc)
@@ -202,11 +206,6 @@ class Prometheus:
                         self.tg.arbitrage(arb[0].title, arb[0].content)
                 except Exception as e:
                     log.debug(f"Arbitrage error: {e}")
-
-                # Breaking news
-                breaking = self.intel.breaking_news(hours=1)
-                if breaking:
-                    self.tg.breaking([dp.title for dp in breaking[:3]])
 
             except Exception as e:
                 log.warning(f"Intel error: {e}")
@@ -271,9 +270,6 @@ class Prometheus:
                 log.info(f"SM risk block: {decision.reason}")
                 continue
 
-            self.tg.smart_money(sig.question, sig.direction,
-                                sig.entry_price, decision.size_usd, sig.reasoning)
-
             # Smart money execution использует Market-like объект
             class _Mkt:
                 question    = sig.question
@@ -285,6 +281,23 @@ class Prometheus:
                                sig.entry_price, decision.size_usd,
                                list(sig.wallet.specializations), "smart_money")
                 sm_trades += 1
+                # Строим URL для Smart Money сигнала
+                import urllib.parse as _up
+                _sm_words = ' '.join(sig.question.split()[:6])
+                _sm_url   = f"https://polymarket.com/markets?_s={_up.quote(_sm_words)}"
+                self.tg.position_opened(
+                    question    = sig.question,
+                    direction   = sig.direction,
+                    price       = sig.entry_price,
+                    size        = decision.size_usd,
+                    edge        = 0.0,
+                    confidence  = "medium",
+                    reasoning   = sig.reasoning,
+                    dry_run     = cfg.dry_run,
+                    signals     = [],
+                    signal_type = "smart_money",
+                    url         = _sm_url,
+                )
 
         # 2. Двухэтапный анализ рынков
         # Этап 1: быстрый скрининг 50 рынков без AI
@@ -298,7 +311,7 @@ class Prometheus:
         # Этап 2: полный AI анализ топ-10 кандидатов
         # В DRY RUN берём топ-15 для накопления данных
         top_n = 15 if cfg.dry_run else cfg.max_markets
-        candidates = screen(all_markets, top_n=top_n)
+        candidates = screen(all_markets, top_n=top_n, fetch_kalshi=False)
         log.info(f"После скрининга: {len(candidates)} кандидатов для AI")
 
         for cand in candidates:
@@ -361,18 +374,29 @@ class Prometheus:
                 log.info(f"  Liquidity block: {liq_reason}")
                 continue
 
-            self.tg.trade(market.question, result.direction, price,
-                          decision.size_usd, result.edge, result.confidence,
-                          result.reasoning, cfg.dry_run,
-                          signals=result.signals)
-
             if _execute(market, result.direction, decision.size_usd, price):
                 token = (market.token_id_yes if result.direction == "YES"
                          else market.token_id_no)
                 self.risk.open(market.id, market.question, result.direction,
                                price, decision.size_usd, list(market.tags),
                                "ai", token_id=token, slug=market.slug)
+                # Сохраняем сигналы для learning после резолюции
+                self._market_signals[market.id] = result.signals
                 ai_trades += 1
+                # Telegram уведомление об открытии
+                self.tg.position_opened(
+                    question    = market.question,
+                    direction   = result.direction,
+                    price       = price,
+                    size        = decision.size_usd,
+                    edge        = result.edge,
+                    confidence  = result.confidence,
+                    reasoning   = result.reasoning,
+                    dry_run     = cfg.dry_run,
+                    signals     = result.signals,
+                    signal_type = "ai",
+                    url         = market.polymarket_url,
+                )
                 # Помечаем сигнал как исполненный
                 for s in reversed(self._signal_history):
                     if s.get("question") == market.question:
@@ -425,11 +449,13 @@ class Prometheus:
                 return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
 
             def polymarket_url(p) -> str:
-                """Ссылка на рынок через поиск — работает для всех типов."""
+                """Прямая ссылка на рынок Polymarket."""
                 import urllib.parse
-                if hasattr(p, 'slug') and p.slug:
-                    return f"https://polymarket.com/event/{p.slug}"
-                words = ' '.join((p.question or '').split()[:5])
+                slug = getattr(p, 'slug', None)
+                if slug:
+                    return f"https://polymarket.com/event/{slug}"
+                # Fallback: поиск
+                words = ' '.join((p.question or '').split()[:6])
                 q = urllib.parse.quote(words)
                 return f"https://polymarket.com/markets?_s={q}"
 
@@ -449,6 +475,7 @@ class Prometheus:
                     "status":       p.status,
                     "type":         p.signal_type,
                     "url":          polymarket_url(p),
+                    "slug":         getattr(p, "slug", "") or "",
                     "token_id":     p.token_id or "",
                 }
 
@@ -540,6 +567,12 @@ class Prometheus:
             )
             self._daily_signals   = 0
             self._daily_sm_alerts = 0
+            # Ежедневная чистка старых данных
+            self.learning.cleanup_old(days=90)
+            try:
+                self.intel.db.cleanup(days=7)  # Intel DB: держим только 7 дней
+            except Exception:
+                pass
 
     def _sleep(self, seconds: int) -> None:
         """Прерываемый sleep."""

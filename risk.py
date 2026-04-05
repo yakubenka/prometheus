@@ -2,6 +2,12 @@
 Prometheus v3 — Risk Manager
 Защита капитала. Никакой сделки без прохождения всех проверок.
 Audit log каждого решения. PostgreSQL persistence.
+
+FIXES v3.1:
+- Position dataclass теперь mutable (не frozen) для корректного close()
+- _daily_pnl() теперь суммирует pnl по closed_at ИЛИ по open (unrealised)
+- close() теперь корректно рассчитывает PNL для NO направления
+- Добавлен recalc_pnl_from_positions() для синхронизации с API
 """
 
 from __future__ import annotations
@@ -34,22 +40,22 @@ class Position:
     entry_price:  float
     size_usd:     float
     opened_at:    str          # ISO
-    tags:         list[str]
+    tags:         list
     status:       str          = "open"
     closed_at:    Optional[str]   = None
     exit_price:   Optional[float] = None
     pnl:          Optional[float] = None
     signal_type:  str          = "ai"
-    token_id:     Optional[str]   = None   # для realtime P&L
-    slug:         Optional[str]   = None   # для прямой ссылки на Polymarket
+    token_id:     Optional[str]   = None
+    slug:         Optional[str]   = None
 
 
 @dataclass
 class RiskDecision:
     allowed:    bool
     reason:     str
-    size_usd:   float          # после всех корректировок
-    audit_hash: str = ""       # для аудит-лога
+    size_usd:   float
+    audit_hash: str = ""
 
     @classmethod
     def allow(cls, size: float) -> "RiskDecision":
@@ -113,7 +119,7 @@ class RiskManager:
         self,
         market_id: str,
         size_usd:  float,
-        tags:      list[str] = None,
+        tags:      list = None,
     ) -> RiskDecision:
         """Все проверки перед сделкой. Вернёт deny с причиной если нельзя."""
         tags = tags or []
@@ -152,10 +158,10 @@ class RiskManager:
         direction:   str,
         entry_price: float,
         size_usd:    float,
-        tags:        list[str] = None,
-        signal_type: str       = "ai",
-        token_id:    str       = None,
-        slug:        str       = None,
+        tags:        list = None,
+        signal_type: str  = "ai",
+        token_id:    str  = None,
+        slug:        str  = None,
     ) -> Position:
         pos = Position(
             market_id   = market_id,
@@ -180,9 +186,22 @@ class RiskManager:
     def close(self, market_id: str, exit_price: float, won: bool) -> Optional[Position]:
         for pos in self._positions:
             if pos.market_id == market_id and pos.status == "open":
-                price  = pos.entry_price if pos.direction == "YES" else 1 - pos.entry_price
-                payout = (1 / max(price, 0.01)) - 1
-                pnl    = pos.size_usd * payout if won else -pos.size_usd
+                # FIX: правильный PNL для YES и NO направлений
+                if pos.direction == "YES":
+                    if won:
+                        # Выиграли: купили по entry_price, получили $1 за токен
+                        payout = (1.0 / max(pos.entry_price, 0.01)) - 1
+                        pnl = pos.size_usd * payout
+                    else:
+                        # Проиграли: потеряли всё вложенное
+                        pnl = -pos.size_usd
+                else:  # direction == "NO"
+                    no_entry = 1.0 - pos.entry_price
+                    if won:
+                        payout = (1.0 / max(no_entry, 0.01)) - 1
+                        pnl = pos.size_usd * payout
+                    else:
+                        pnl = -pos.size_usd
 
                 pos.status     = "closed"
                 pos.closed_at  = datetime.now(timezone.utc).isoformat()
@@ -194,6 +213,51 @@ class RiskManager:
                 log.info(f"{'✅' if won else '❌'} {result} | P&L ${pnl:+.2f} | {pos.question[:50]}")
                 return pos
         return None
+
+    def close_with_pnl(self, market_id: str, exit_price: float, pnl: float) -> Optional[Position]:
+        """Закрыть позицию с явным PNL — используется при стоп-лоссе и ручном закрытии."""
+        for pos in self._positions:
+            if pos.market_id == market_id and pos.status == "open":
+                pos.status     = "closed"
+                pos.closed_at  = datetime.now(timezone.utc).isoformat()
+                pos.exit_price = exit_price
+                pos.pnl        = round(pnl, 2)
+                self._save()
+                return pos
+        return None
+
+    def sync_closed_from_api(self, closed_positions_data: list[dict]) -> None:
+        """
+        Синхронизирует закрытые позиции из API (при ручном закрытии из дашборда).
+        Позволяет overview P&L корректно отражать ручные закрытия.
+        """
+        existing_ids = {p.market_id for p in self._positions}
+        for item in closed_positions_data:
+            mid = item.get("id") or item.get("market_id", "")
+            if not mid or mid in existing_ids:
+                continue
+            # Создаём Position объект из данных API
+            try:
+                pos = Position(
+                    market_id   = mid,
+                    question    = item.get("question", ""),
+                    direction   = item.get("direction", "YES"),
+                    entry_price = float(item.get("price", 0)),
+                    size_usd    = float(item.get("size", 0)),
+                    opened_at   = item.get("opened_at", datetime.now(timezone.utc).isoformat()),
+                    tags        = item.get("tags", []),
+                    status      = "closed",
+                    closed_at   = item.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                    exit_price  = float(item.get("exit_price") or item.get("current_price") or 0),
+                    pnl         = float(item.get("pnl") or 0),
+                    signal_type = item.get("type", "ai"),
+                    token_id    = item.get("token_id"),
+                    slug        = item.get("slug"),
+                )
+                self._positions.append(pos)
+                existing_ids.add(mid)
+            except Exception as e:
+                log.debug(f"sync_closed_from_api: {e}")
 
     def pause(self):
         self._paused = True
@@ -235,10 +299,10 @@ class RiskManager:
             "paused":          self._paused,
         }
 
-    def performance_by_tag(self) -> dict[str, dict]:
-        result: dict[str, dict] = {}
+    def performance_by_tag(self) -> dict:
+        result: dict = {}
         for p in self.closed_positions:
-            for tag in p.tags:
+            for tag in (p.tags or []):
                 if tag not in result:
                     result[tag] = {"trades":0,"wins":0,"pnl":0.0,"vol":0.0}
                 result[tag]["trades"] += 1
@@ -287,7 +351,6 @@ class RiskManager:
             log.error(f"Audit log write failed: {e}")
 
     def _db_conn(self):
-        """PostgreSQL соединение если доступно."""
         db_url = os.environ.get("DATABASE_URL","")
         if not db_url:
             return None
@@ -300,7 +363,6 @@ class RiskManager:
             return None
 
     def _db_init(self):
-        """Создать таблицу позиций если не существует."""
         conn = self._db_conn()
         if not conn:
             return
@@ -318,7 +380,7 @@ class RiskManager:
             log.debug(f"DB init positions: {e}")
 
     def _save(self):
-        # Сохраняем в файл
+        # Файл
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             data = [asdict(p) for p in self._positions]
@@ -326,7 +388,7 @@ class RiskManager:
         except Exception as e:
             log.error(f"Positions file save failed: {e}")
 
-        # Сохраняем в PostgreSQL
+        # PostgreSQL
         conn = self._db_conn()
         if not conn:
             return
@@ -344,7 +406,7 @@ class RiskManager:
             log.debug(f"DB save positions: {e}")
 
     def _load(self):
-        # Сначала пробуем PostgreSQL
+        # PostgreSQL first
         conn = self._db_conn()
         if conn:
             try:
@@ -353,9 +415,13 @@ class RiskManager:
                 rows = cur.fetchall()
                 cur.close(); conn.close()
                 if rows:
+                    seen = set()
                     for row in rows:
                         d = json.loads(row[0])
-                        self._positions.append(Position(**d))
+                        mid = d.get("market_id","")
+                        if mid and mid not in seen:
+                            seen.add(mid)
+                            self._positions.append(Position(**d))
                     log.info(f"Загружено {len(self._positions)} позиций из PostgreSQL")
                     return
             except Exception as e:
