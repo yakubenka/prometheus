@@ -170,6 +170,59 @@ def health():
         "ts": datetime.utcnow().isoformat(),
     }
 
+@app.get("/api/debug/telegram")
+def debug_telegram():
+    """
+    Проверить работу Telegram прямо из браузера.
+    Открой: https://<твой-api>.railway.app/api/debug/telegram
+    """
+    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    if not token:
+        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN не задан в Railway Variables"}
+    if not chat_id:
+        return {"ok": False, "error": "TELEGRAM_CHAT_ID не задан в Railway Variables"}
+
+    # Проверяем токен
+    try:
+        import requests as _req
+        r = _req.get(f"https://api.telegram.org/bot{token}/getMe", timeout=5)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"Невалидный токен: HTTP {r.status_code}"}
+        bot_name = r.json().get("result", {}).get("username", "?")
+    except Exception as e:
+        return {"ok": False, "error": f"Не могу достучаться до Telegram API: {e}"}
+
+    # Отправляем тестовое сообщение
+    try:
+        r2 = _req.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id":    chat_id,
+                "text":       "✅ *Prometheus — тест связи*\n\nTelegram работает!",
+                "parse_mode": "Markdown",
+            },
+            timeout=8,
+        )
+        if r2.status_code == 200:
+            return {
+                "ok":       True,
+                "bot":      f"@{bot_name}",
+                "chat_id":  chat_id,
+                "message":  "Тестовое сообщение отправлено — проверь Telegram",
+            }
+        else:
+            err = r2.json().get("description", r2.text[:100])
+            return {
+                "ok":      False,
+                "bot":     f"@{bot_name}",
+                "error":   f"sendMessage failed: {err}",
+                "hint":    "Скорее всего неверный TELEGRAM_CHAT_ID",
+            }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @app.get("/api/overview")
 def overview():
     d = store_get("overview")
