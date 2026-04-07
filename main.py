@@ -22,6 +22,7 @@ from learning import LearningEngine
 from intel import IntelPipeline
 from intel_ext import ExtendedIntelPipeline
 from screener import screen
+from position_review import PositionReviewer
 from liquidity import is_market_liquid
 
 import logging
@@ -119,6 +120,12 @@ class Prometheus:
         self._last_breaking:    float           = 0.0  # время последнего breaking news цикла
         self._whale_alerts:     list            = []   # крупные необычные сделки
         self._market_signals:   dict            = {}   # market_id → list[Signal] для learning
+        self._reviewer = PositionReviewer(
+            risk_manager = self.risk,
+            ai           = self.ai,
+            intel        = self.intel,
+            telegram     = self.tg,
+        )
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -139,6 +146,7 @@ class Prometheus:
             try:
                 self._maybe_daily_report()
                 self._resolve_positions()
+                self._review_positions()
                 self._run_intel()
                 self._check_risk_alerts()
                 self._trade_cycle()
@@ -183,6 +191,17 @@ class Prometheus:
                 self.tg.weights_updated(new_weights)
             # Чистим после использования
             self._market_signals.pop(c["market_id"], None)
+
+    def _review_positions(self) -> None:
+        """Динамическая переоценка открытых позиций."""
+        if not self._reviewer.should_run():
+            return
+        try:
+            actions = self._reviewer.run()
+            if actions:
+                self._push_to_api()  # обновляем дашборд сразу
+        except Exception as e:
+            log.warning(f"Position review error: {e}")
 
     def _run_intel(self) -> None:
         now = datetime.now(timezone.utc)
