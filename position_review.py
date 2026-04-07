@@ -436,30 +436,35 @@ class PositionReviewer:
         """Тихое уведомление что проверили и решили держать."""
         if not self.tg:
             return
-        upnl     = decision.unrealised_pnl
         captured = _profit_captured_pct(pos, decision.current_price)
-        icon     = "📈" if upnl >= 0 else "📉"
-        self.tg.send(
-            f"🔍 *Обзор позиции — ДЕРЖИМ*\n\n"
-            f"*{pos.question[:70]}*\n\n"
-            f"{icon} uP&L: *${upnl:+.2f}*  |  Захвачено: *{captured:.0%}*\n"
-            f"Триггер: `{decision.trigger}`\n"
-            f"_{decision.reasoning}_",
-            silent=True,
-        )
+        if hasattr(self.tg, 'position_review_hold'):
+            self.tg.position_review_hold(
+                question  = pos.question,
+                direction = pos.direction,
+                upnl      = decision.unrealised_pnl,
+                captured  = captured,
+                trigger   = decision.trigger,
+                reasoning = decision.reasoning,
+                new_prob  = decision.new_prob,
+            )
 
     def _notify_action(self, pos, decision: ReviewDecision,
                        pnl: float) -> None:
         """Уведомление о закрытии позиции через review."""
         if not self.tg:
             return
-        won  = pnl >= 0
-        icon = "💰" if decision.action == "TAKE_PROFIT" else "✂️"
-        act  = "ФИКСАЦИЯ ПРИБЫЛИ" if decision.action == "TAKE_PROFIT" else "СТОП ПО ТЕЗИСУ"
-        self.tg.send(
-            f"{icon} *{act}*\n\n"
-            f"*{pos.question[:70]}*\n\n"
-            f"P&L: *{'+'if won else ''}${pnl:.2f}*\n"
-            f"Цена: `{pos.entry_price:.3f}` → `{decision.current_price:.3f}`\n\n"
-            f"💡 _{decision.reasoning}_"
-        )
+        import urllib.parse as _up
+        slug = getattr(pos, 'slug', None)
+        url  = (f"https://polymarket.com/event/{slug}" if slug
+                else f"https://polymarket.com/?s={_up.quote((pos.question or '')[:100])}")
+        if hasattr(self.tg, 'position_review_action'):
+            self.tg.position_review_action(
+                question    = pos.question,
+                direction   = pos.direction,
+                action      = decision.action,
+                entry_price = pos.entry_price,
+                exit_price  = decision.current_price,
+                pnl         = pnl,
+                reasoning   = decision.reasoning,
+                url         = url,
+            )

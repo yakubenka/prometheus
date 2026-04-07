@@ -161,6 +161,7 @@ class PositionResolver:
             "outcome":     outcome,
             "won":         won,
             "pnl":         pnl,
+            "size_usd":    pos.size_usd,
             "signal_type": pos.signal_type,
             "tags":        pos.tags,
         }

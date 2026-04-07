@@ -249,6 +249,9 @@ body{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF
 
   <div class="sec">AI SIGNAL ACCURACY</div>
   <div class="card" id="learnlist"><div class="empty">Accumulating data…</div></div>
+
+  <div class="sec">DOMAIN PERFORMANCE  <span style="font-size:10px;color:rgba(255,255,255,.3);font-weight:400">adaptive sizing</span></div>
+  <div class="card" id="domainlist"><div class="empty">Accumulating domain data…</div></div>
 </div>
 
 </div>
@@ -681,7 +684,7 @@ async function closePos(marketId,e){
 }
 
 async function refresh(){
-  await Promise.allSettled([loadOV(),loadSig(),loadPos(),loadHist(),loadSM(),loadLearn()]);
+  await Promise.allSettled([loadOV(),loadSig(),loadPos(),loadHist(),loadSM(),loadLearn(),loadDomains()]);
 }
 refresh();
 setInterval(refresh,POLL);

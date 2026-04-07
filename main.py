@@ -23,6 +23,7 @@ from intel import IntelPipeline
 from intel_ext import ExtendedIntelPipeline
 from screener import screen
 from position_review import PositionReviewer
+from domain_intel import DomainPrior, build_market_context, portfolio_kelly_size
 from liquidity import is_market_liquid
 
 import logging
@@ -126,6 +127,7 @@ class Prometheus:
             intel        = self.intel,
             telegram     = self.tg,
         )
+        self._domain_prior = DomainPrior(cfg.logs_dir)
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -189,6 +191,39 @@ class Prometheus:
             if new_weights:
                 self.signals.update_weights(new_weights)
                 self.tg.weights_updated(new_weights)
+            # Обновляем байесовский prior по доменам
+            _tags = c.get("tags", [])
+            _prev_mults = {
+                d: self._domain_prior.get_size_multiplier([d])
+                for d in _tags
+            }
+            self._domain_prior.record(
+                tags = _tags,
+                won  = c["won"],
+                pnl  = c["pnl"],
+                size = c.get("size_usd", 0),
+            )
+            # Уведомление если множитель значительно изменился
+            for d in _tags:
+                new_m = self._domain_prior.get_size_multiplier([d])
+                old_m = _prev_mults.get(d, 1.0)
+                # Уведомляем при переходе через пороги 1.2x / 0.7x
+                crossed = (
+                    (old_m < 1.2 and new_m >= 1.2) or
+                    (old_m > 1.2 and new_m < 1.2) or
+                    (old_m > 0.7 and new_m <= 0.7) or
+                    (old_m < 0.7 and new_m > 0.7)
+                )
+                if crossed and abs(new_m - old_m) > 0.05:
+                    st = self._domain_prior._stats.get(d)
+                    if st:
+                        self.tg.domain_shift(
+                            domain   = d,
+                            old_mult = old_m,
+                            new_mult = new_m,
+                            win_rate = st.win_rate,
+                            total    = st.total,
+                        )
             # Чистим после использования
             self._market_signals.pop(c["market_id"], None)
 
@@ -303,18 +338,17 @@ class Prometheus:
                 # Строим URL для Smart Money сигнала
                 import urllib.parse as _up
                 _sm_url = f"https://polymarket.com/?s={_up.quote(sig.question[:100])}"
-                self.tg.position_opened(
-                    question    = sig.question,
-                    direction   = sig.direction,
-                    price       = sig.entry_price,
-                    size        = decision.size_usd,
-                    edge        = 0.0,
-                    confidence  = "medium",
-                    reasoning   = sig.reasoning,
-                    dry_run     = cfg.dry_run,
-                    signals     = [],
-                    signal_type = "smart_money",
-                    url         = _sm_url,
+                self.tg.insider_detected(
+                    question     = sig.question,
+                    direction    = sig.direction,
+                    price        = sig.entry_price,
+                    their_size   = sig.their_size,
+                    our_size     = decision.size_usd,
+                    trader_class = sig.wallet.trader_class.value,
+                    win_rate     = sig.wallet.win_rate,
+                    roi          = sig.wallet.roi,
+                    reasoning    = sig.reasoning,
+                    url          = _sm_url,
                 )
 
         # 2. Двухэтапный анализ рынков
@@ -371,13 +405,42 @@ class Prometheus:
                 else:
                     continue
 
-            size     = self.risk.kelly_size(result.ai_probability,
-                                            market.yes_price, result.direction,
-                                            cfg.bankroll)
+            # Строим контекст рынка (domain prior, timing, microstructure)
+            token_id_for_ctx = (market.token_id_yes if result.direction == "YES"
+                                else market.token_id_no)
+            mctx = build_market_context(
+                tags          = list(market.tags),
+                token_id      = token_id_for_ctx or "",
+                current_price = market.yes_price,
+                domain_prior  = self._domain_prior,
+                intel_db      = self.intel.db,
+            )
+            log.info(f"  Context: {mctx.summary()}")
+
+            # Portfolio Kelly с domain multiplier
+            size = portfolio_kelly_size(
+                ai_probability   = result.ai_probability,
+                market_price     = market.yes_price,
+                direction        = result.direction,
+                bankroll         = cfg.bankroll,
+                kelly_fraction   = cfg.kelly_frac,
+                open_positions   = self.risk.open_positions,
+                max_position_usd = cfg.max_pos_usd,
+                domain_multiplier = mctx.total_size_multiplier,
+            )
+
             # Высокий edge но низкая уверенность — половина размера
             if result.confidence == "low" and result.edge >= 0.20:
                 size = size * 0.5
-                log.info(f"  Reduced size (low confidence override): ${size:.2f}")
+                log.info(f"  Reduced size (low confidence): ${size:.2f}")
+
+            # Microstructure confirmation: если сигнал против нас — уменьшаем
+            if (mctx.microstructure and
+                mctx.microstructure.direction != "NEUTRAL" and
+                mctx.microstructure.direction != result.direction and
+                mctx.microstructure.confidence > 0.40):
+                size = size * 0.6
+                log.info(f"  Micro contra-signal ({mctx.microstructure.reasoning}): size reduced")
 
             decision = self.risk.check(market.id, size, list(market.tags))
             if not decision.allowed:
@@ -414,7 +477,22 @@ class Prometheus:
                     signals     = result.signals,
                     signal_type = "ai",
                     url         = market.polymarket_url,
+                    domain_mult = mctx.domain_multiplier,
+                    timing      = mctx.timing_reason,
                 )
+                # Microstructure уведомление если сильный сигнал
+                if (mctx.microstructure and
+                    mctx.microstructure.confidence > 0.50 and
+                    mctx.microstructure.direction != "NEUTRAL"):
+                    action = ("confirmed" if mctx.microstructure.direction == result.direction
+                              else "contra")
+                    self.tg.microstructure_signal(
+                        question   = market.question,
+                        direction  = mctx.microstructure.direction,
+                        confidence = mctx.microstructure.confidence,
+                        reasoning  = mctx.microstructure.reasoning,
+                        action     = action,
+                    )
                 # Помечаем сигнал как исполненный
                 for s in reversed(self._signal_history):
                     if s.get("question") == market.question:
@@ -559,6 +637,7 @@ class Prometheus:
                 },
                 "learning": {
                     "signal_stats": learning_stats,
+                    "domain_stats": self._domain_prior.stats_summary(),
                 },
             }
 
@@ -578,19 +657,26 @@ class Prometheus:
         if now.hour == cfg.report_hour and self._last_report_date != today:
             self._last_report_date = today
             self.tg.daily_report(
-                snap      = self.risk.snapshot(),
-                by_tag    = self.risk.performance_by_tag(),
-                signals   = self._daily_signals,
-                sm_alerts = self._daily_sm_alerts,
+                snap         = self.risk.snapshot(),
+                by_tag       = self.risk.performance_by_tag(),
+                signals      = self._daily_signals,
+                sm_alerts    = self._daily_sm_alerts,
+                domain_stats = self._domain_prior.stats_summary(),
             )
             self._daily_signals   = 0
             self._daily_sm_alerts = 0
             # Ежедневная чистка старых данных
             self.learning.cleanup_old(days=90)
             try:
-                self.intel.db.cleanup(days=7)  # Intel DB: держим только 7 дней
+                self.intel.db.cleanup(days=7)
             except Exception:
                 pass
+            # Еженедельный отчёт по воскресеньям
+            if now.weekday() == 6:
+                self.tg.weekly_report(
+                    snap         = self.risk.snapshot(),
+                    domain_stats = self._domain_prior.stats_summary(),
+                )
 
     def _sleep(self, seconds: int) -> None:
         """Прерываемый sleep."""
