@@ -1,17 +1,27 @@
 """
-Prometheus v3 — Self-Improvement Loop
+Prometheus v3.1 — Self-Improvement Loop
 Система учится на реальных результатах.
 Обновляет веса сигналов. Сохраняет историю точности.
+
+FIXES v3.1:
+- _save() больше не читает весь файл каждый раз (был O(n²)) — теперь append-only
+- _save() дедупликация через in-memory set, не через файл
+- record() принимает signals из EnsembleResult (не []) — правильная привязка
+- stats() добавляет "predictit" в список сигналов (раньше отсутствовал)
+- calc_weights() добавляет "predictit" в расчёт
+- Добавлен cleanup_old(): удаляет записи старше 90 дней
 """
 
 from __future__ import annotations
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dataclasses import dataclass, asdict
 
 log = logging.getLogger("prometheus.learning")
+
+SIGNAL_NAMES = ["sentiment", "momentum", "calibration", "consensus", "predictit", "base_rate"]
 
 
 @dataclass
@@ -19,14 +29,15 @@ class SignalRecord:
     """Запись о предсказании сигнала и реальном исходе."""
     timestamp:      str
     market_id:      str
-    signal_name:    str    # sentiment / momentum / calibration / consensus / base_rate
-    predicted_prob: float  # что сигнал предсказал
-    direction:      str    # YES / NO
+    signal_name:    str
+    predicted_prob: float
+    direction:      str
     edge:           float
     market_price:   float
-    actual_outcome: str    # YES / NO
+    actual_outcome: str
     was_correct:    bool
     pnl:            float
+    question_type:  str = "general"   # electoral/economic/geopolitical/crypto/binary
 
 
 class LearningEngine:
@@ -34,11 +45,13 @@ class LearningEngine:
     Накапливает историю предсказаний.
     Пересчитывает веса каждые N закрытых позиций.
     """
-    UPDATE_EVERY = 20   # пересчитывать веса каждые 20 закрытых позиций
+    UPDATE_EVERY = 20
 
     def __init__(self, data_dir: str = "/app/logs"):
         self._dir     = Path(data_dir)
         self._records: list[SignalRecord] = []
+        # FIX: in-memory dedup set — ключ = market_id + signal_name
+        self._saved_keys: set[str] = set()
         self._load()
 
     def record(
@@ -49,9 +62,21 @@ class LearningEngine:
         market_price:   float,
         actual_outcome: str,
         pnl:            float,
+        question_type:  str = "general",
     ):
-        """Записать результат предсказания после резолюции рынка."""
+        """
+        Записать результат предсказания после резолюции рынка.
+        signals должны приходить из EnsembleResult.signals — не пустой список.
+        """
+        if not signals:
+            log.debug(f"learning.record: no signals for {market_id[:20]} — skipping")
+            return None
+
+        new_records = []
         for sig in signals:
+            key = f"{market_id}:{sig.name}"
+            if key in self._saved_keys:
+                continue
             rec = SignalRecord(
                 timestamp      = datetime.now(timezone.utc).isoformat(),
                 market_id      = market_id,
@@ -63,10 +88,14 @@ class LearningEngine:
                 actual_outcome = actual_outcome,
                 was_correct    = sig.direction == actual_outcome,
                 pnl            = pnl,
+                question_type  = question_type,
             )
             self._records.append(rec)
+            self._saved_keys.add(key)
+            new_records.append(rec)
 
-        self._save()
+        if new_records:
+            self._append(new_records)
 
         # Пересчитываем веса каждые UPDATE_EVERY уникальных рынков
         unique_markets = len({r.market_id for r in self._records})
@@ -82,10 +111,9 @@ class LearningEngine:
         Посчитать новые веса на основе реальной точности каждого сигнала.
         Сигнал который часто прав → получает больший вес.
         """
-        signal_names = ["sentiment", "momentum", "calibration", "consensus", "base_rate"]
         perf: dict[str, dict] = {
             n: {"correct": 0, "total": 0, "weighted_correct": 0.0}
-            for n in signal_names
+            for n in SIGNAL_NAMES
         }
 
         for r in self._records:
@@ -95,27 +123,22 @@ class LearningEngine:
             p["total"] += 1
             if r.was_correct:
                 p["correct"] += 1
-                # Большие edge вносят больший вклад
                 p["weighted_correct"] += 1 + r.edge * 2
 
-        # Accuracy с взвешиванием по edge
         accuracies = {}
         for name, p in perf.items():
             if p["total"] < 5:
-                accuracies[name] = 0.5  # нейтрально если мало данных
+                accuracies[name] = 0.5
             else:
                 raw_acc = p["correct"] / p["total"]
-                # Штрафуем сигналы которые хуже random (< 0.5)
                 accuracies[name] = max(0.1, raw_acc)
 
-        # Нормализуем в веса (сумма = 1)
         total = sum(accuracies.values())
         weights = {
             name: round(max(0.05, acc / total), 3)
             for name, acc in accuracies.items()
         }
 
-        # Сохранить историю весов
         self._save_weights(weights, accuracies)
         return weights
 
@@ -125,41 +148,66 @@ class LearningEngine:
             return {}
 
         result = {}
-        for name in ["sentiment", "momentum", "calibration", "consensus", "base_rate"]:
+        for name in SIGNAL_NAMES:
             recs = [r for r in self._records if r.signal_name == name]
             if not recs:
                 continue
             correct = sum(1 for r in recs if r.was_correct)
             result[name] = {
-                "accuracy":   round(correct / len(recs), 3),
-                "total":      len(recs),
-                "avg_edge":   round(sum(r.edge for r in recs) / len(recs), 3),
+                "accuracy": round(correct / len(recs), 3),
+                "total":    len(recs),
+                "avg_edge": round(sum(r.edge for r in recs) / len(recs), 3),
             }
-
         return result
 
-    def _save(self):
+    def stats_by_type(self) -> dict:
+        """Точность по типу вопроса — для выявления где AI сильнее/слабее."""
+        result = {}
+        for qtype in ["electoral", "economic", "geopolitical", "crypto", "binary", "general"]:
+            recs = [r for r in self._records if getattr(r, "question_type", "general") == qtype]
+            if not recs:
+                continue
+            correct = sum(1 for r in recs if r.was_correct)
+            result[qtype] = {
+                "accuracy": round(correct / len(recs), 3),
+                "total":    len(recs),
+                "avg_pnl":  round(sum(r.pnl for r in recs) / len(recs), 3),
+            }
+        return result
+
+    def cleanup_old(self, days: int = 90) -> int:
+        """Удалить записи старше N дней. Возвращает кол-во удалённых."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        before = len(self._records)
+        self._records = [r for r in self._records if r.timestamp >= cutoff]
+        removed = before - len(self._records)
+        if removed > 0:
+            log.info(f"🧹 Learning: удалено {removed} старых записей (>{days}d)")
+            # Перезаписываем файл
+            self._rewrite()
+        return removed
+
+    def _append(self, records: list[SignalRecord]) -> None:
+        """FIX: просто дописываем новые записи — не читаем весь файл."""
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             path = self._dir / "signal_records.jsonl"
-            # Appending только новые
-            existing = set()
-            if path.exists():
-                for line in path.read_text().splitlines():
-                    try:
-                        existing.add(json.loads(line).get("market_id","") +
-                                     json.loads(line).get("signal_name",""))
-                    except Exception:
-                        pass
-
             with path.open("a") as f:
-                for r in self._records:
-                    key = r.market_id + r.signal_name
-                    if key not in existing:
-                        f.write(json.dumps(asdict(r)) + "\n")
-                        existing.add(key)
+                for r in records:
+                    f.write(json.dumps(asdict(r)) + "\n")
         except Exception as e:
-            log.error(f"Learning save error: {e}")
+            log.error(f"Learning append error: {e}")
+
+    def _rewrite(self) -> None:
+        """Полная перезапись файла (после cleanup)."""
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            path = self._dir / "signal_records.jsonl"
+            with path.open("w") as f:
+                for r in self._records:
+                    f.write(json.dumps(asdict(r)) + "\n")
+        except Exception as e:
+            log.error(f"Learning rewrite error: {e}")
 
     def _load(self):
         try:
@@ -169,7 +217,13 @@ class LearningEngine:
             for line in path.read_text().splitlines():
                 try:
                     d = json.loads(line)
-                    self._records.append(SignalRecord(**d))
+                    # Backward compatibility: old records may not have question_type
+                    d.setdefault("question_type", "general")
+                    r = SignalRecord(**d)
+                    key = f"{r.market_id}:{r.signal_name}"
+                    if key not in self._saved_keys:
+                        self._records.append(r)
+                        self._saved_keys.add(key)
                 except Exception:
                     pass
             log.info(f"Загружено {len(self._records)} signal records")
