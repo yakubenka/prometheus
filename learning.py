@@ -37,6 +37,7 @@ class SignalRecord:
     actual_outcome: str
     was_correct:    bool
     pnl:            float
+    question_type:  str = "general"   # electoral/economic/geopolitical/crypto/binary
 
 
 class LearningEngine:
@@ -61,6 +62,7 @@ class LearningEngine:
         market_price:   float,
         actual_outcome: str,
         pnl:            float,
+        question_type:  str = "general",
     ):
         """
         Записать результат предсказания после резолюции рынка.
@@ -86,6 +88,7 @@ class LearningEngine:
                 actual_outcome = actual_outcome,
                 was_correct    = sig.direction == actual_outcome,
                 pnl            = pnl,
+                question_type  = question_type,
             )
             self._records.append(rec)
             self._saved_keys.add(key)
@@ -157,6 +160,21 @@ class LearningEngine:
             }
         return result
 
+    def stats_by_type(self) -> dict:
+        """Точность по типу вопроса — для выявления где AI сильнее/слабее."""
+        result = {}
+        for qtype in ["electoral", "economic", "geopolitical", "crypto", "binary", "general"]:
+            recs = [r for r in self._records if getattr(r, "question_type", "general") == qtype]
+            if not recs:
+                continue
+            correct = sum(1 for r in recs if r.was_correct)
+            result[qtype] = {
+                "accuracy": round(correct / len(recs), 3),
+                "total":    len(recs),
+                "avg_pnl":  round(sum(r.pnl for r in recs) / len(recs), 3),
+            }
+        return result
+
     def cleanup_old(self, days: int = 90) -> int:
         """Удалить записи старше N дней. Возвращает кол-во удалённых."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -199,6 +217,8 @@ class LearningEngine:
             for line in path.read_text().splitlines():
                 try:
                     d = json.loads(line)
+                    # Backward compatibility: old records may not have question_type
+                    d.setdefault("question_type", "general")
                     r = SignalRecord(**d)
                     key = f"{r.market_id}:{r.signal_name}"
                     if key not in self._saved_keys:

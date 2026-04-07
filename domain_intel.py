@@ -556,10 +556,9 @@ def build_market_context(
     if token_id:
         ctx.microstructure = analyze_microstructure(token_id, current_price)
 
-    # Domain sentiment
+    # Domain sentiment (no circular import needed - tags already extracted)
     if intel_db and tags:
-        from data import _extract_tags  # импортируем здесь чтобы избежать circular
-        domains_for_sent = [t for t in tags if t in ALL_DOMAINS]
+        domains_for_sent = [str(t).lower() for t in tags if str(t).lower() in ALL_DOMAINS]
         if domains_for_sent:
             ctx.domain_sentiment = get_domain_sentiment(domains_for_sent[0], intel_db)
 
