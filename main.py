@@ -75,6 +75,26 @@ def _execute(market: Market, direction: str,
 
         client.set_api_creds(client.create_or_derive_api_creds())
 
+        # Check CLOB balance - detailed logging for debugging
+        try:
+            clob_balance = client.get_balance()
+            log.info(f"CLOB balance raw: {clob_balance}")
+        except Exception as be:
+            log.warning(f"Balance check error: {be}")
+
+        # Check balance-allowance endpoint
+        try:
+            import requests as _req
+            ba_resp = _req.get(
+                "https://clob.polymarket.com/balance-allowance",
+                params={"asset_type": "USDC"},
+                headers=client.get_headers("GET", "/balance-allowance"),
+                timeout=5,
+            )
+            log.info(f"Balance-allowance: {ba_resp.text[:200]}")
+        except Exception as be2:
+            log.warning(f"Balance-allowance error: {be2}")
+
         token = market.token_id_yes if direction == "YES" else market.token_id_no
         if not token:
             log.error("Нет token_id для исполнения")
