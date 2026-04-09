@@ -76,8 +76,8 @@ class Config:
             raise ValueError("ANTHROPIC_API_KEY не задан в .env")
         if not self.dry_run and not self.poly_key:
             raise ValueError("DRY_RUN=false но POLYMARKET_PRIVATE_KEY не задан")
-        if not self.dry_run and not self.poly_funder:
-            raise ValueError("DRY_RUN=false но POLYMARKET_FUNDER не задан")
+        # POLYMARKET_FUNDER is optional - only needed for proxy wallet mode
+        # For EOA trading (signature_type=0), funder is not required
         if self.max_pos_usd <= 0:
             raise ValueError("MAX_POSITION_USD должен быть > 0")
         if self.kelly_frac <= 0 or self.kelly_frac > 1:
