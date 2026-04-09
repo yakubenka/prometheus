@@ -39,9 +39,10 @@ def send_tx(w3, contract_fn, addr, private_key):
 def main():
     private_key = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
     public_key  = os.environ.get("POLYMARKET_FUNDER", "")
-    if not private_key or not public_key:
-        print("ERROR: POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER must be set")
+    if not private_key:
+        print("ERROR: POLYMARKET_PRIVATE_KEY must be set")
         sys.exit(1)
+    # POLYMARKET_FUNDER is optional for EOA mode
     if not private_key.startswith("0x"):
         private_key = "0x" + private_key
 
