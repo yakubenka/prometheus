@@ -73,7 +73,16 @@ def _execute(market: Market, direction: str,
             if hasattr(client, "_session"):
                 client._session = _session
 
-        client.set_api_creds(client.create_or_derive_api_creds())
+        # Fix: create_or_derive_api_creds may return dict or ApiCreds object
+        raw_creds = client.create_or_derive_api_creds()
+        if isinstance(raw_creds, dict):
+            from py_clob_client.clob_types import ApiCreds
+            raw_creds = ApiCreds(
+                api_key        = raw_creds["api_key"],
+                api_secret     = raw_creds["api_secret"],
+                api_passphrase = raw_creds["api_passphrase"],
+            )
+        client.set_api_creds(raw_creds)
 
         # Check CLOB balance - detailed logging for debugging
         try:
