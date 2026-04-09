@@ -1,14 +1,18 @@
 """
-Prometheus v3.2 — Position Resolver
+Prometheus v3.3 — Position Resolver
 
-FIXES v3.2:
-- Использует tg.position_closed() вместо raw tg() текста
-- tg передаётся как объект Telegram, не как функция send
-- stop-loss корректный PNL для NO направлений
+FIXES v3.3:
+- check_market_outcome теперь определяет исход через Gamma API (outcomePrices[0])
+  а не по цене токена позиции — устраняет путаницу YES/NO сторон.
+- get_yes_price() — отдельная функция для получения YES-цены рынка через Gamma.
+- Добавлена redeem_winning_position() — автоматический клейм выигрыша через CLOB.
+- run() вызывает redeem автоматически после каждой победной позиции.
+- При неудачном redeem — Telegram уведомление с ссылкой для ручного клейма.
 """
 from __future__ import annotations
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 import requests
@@ -22,34 +26,79 @@ CLOB  = "https://clob.polymarket.com"
 
 
 def check_market_outcome(market_id: str, current_price: float = None) -> Optional[str]:
-    if current_price is not None:
-        if current_price >= 0.99:  return "YES"
-        if current_price <= 0.01:  return "NO"
+    """
+    Определяет итог рынка (YES/NO) через Gamma API.
+
+    current_price здесь — YES-токен цена (не наш токен).
+    Используется только как fallback если Gamma недоступна.
+    """
     try:
         r = requests.get(f"{GAMMA}/markets/{market_id}", timeout=8)
         if r.status_code != 200:
+            if current_price is not None:
+                if current_price >= 0.99:  return "YES"
+                if current_price <= 0.01:  return "NO"
             return None
+
         m = r.json()
+
+        # 1. Явный winner из API
         winner = m.get("winner") or m.get("resolvedOutcome") or m.get("resolution")
         if winner:
             w = str(winner).upper()
             if w in ("YES", "1", "TRUE"):  return "YES"
             if w in ("NO",  "0", "FALSE"): return "NO"
+
+        # 2. Закрытый рынок — outcomePrices[0] = YES цена после резолюции
         if m.get("closed") or m.get("active") == False:
+            prices = m.get("outcomePrices")
+            if isinstance(prices, str):
+                try:
+                    prices = json.loads(prices)
+                except Exception:
+                    prices = None
+            if prices and len(prices) >= 2:
+                yes_final = float(prices[0])
+                no_final  = float(prices[1])
+                if yes_final >= 0.97: return "YES"
+                if no_final  >= 0.97: return "NO"
+                if yes_final > no_final and yes_final >= 0.90: return "YES"
+                if no_final > yes_final and no_final  >= 0.90: return "NO"
+
+        return None
+
+    except Exception as e:
+        log.debug(f"check_market_outcome error {market_id}: {e}")
+        if current_price is not None:
+            if current_price >= 0.99:  return "YES"
+            if current_price <= 0.01:  return "NO"
+        return None
+
+
+def get_yes_price(market_id: str) -> Optional[float]:
+    """
+    YES-цена рынка через Gamma API.
+    Используется для определения исхода — НЕ для P&L нашей позиции.
+    """
+    try:
+        r = requests.get(f"{GAMMA}/markets/{market_id}", timeout=5)
+        if r.status_code == 200:
+            m = r.json()
             prices = m.get("outcomePrices")
             if isinstance(prices, str):
                 prices = json.loads(prices)
             if prices:
-                yes_price = float(prices[0])
-                if yes_price >= 0.97: return "YES"
-                if yes_price <= 0.03: return "NO"
-        return None
-    except Exception as e:
-        log.debug(f"check_market_outcome error {market_id}: {e}")
-        return None
+                return float(prices[0])
+    except Exception:
+        pass
+    return None
 
 
 def get_current_price(token_id: str) -> Optional[float]:
+    """
+    Midpoint цена конкретного токена с CLOB.
+    Это цена НАШЕГО токена (YES или NO по direction позиции).
+    """
     try:
         r = requests.get(f"{CLOB}/midpoint", params={"token_id": token_id}, timeout=5)
         if r.status_code == 200:
@@ -59,10 +108,97 @@ def get_current_price(token_id: str) -> Optional[float]:
     return None
 
 
+def redeem_winning_position(market_id: str, token_id: str,
+                             shares: float, poly_key: str = None) -> bool:
+    """
+    Клейм выигрышных shares — USDC возвращается на баланс кошелька.
+
+    Три попытки:
+    1. Нативный client.redeem_positions() если есть в py_clob_client
+    2. HTTP POST /redeem
+    3. SELL winning shares по рыночной цене (fallback)
+    """
+    _key = poly_key or os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+    if not _key:
+        log.warning("redeem: POLYMARKET_PRIVATE_KEY не задан — пропускаем")
+        return False
+
+    if not token_id:
+        log.warning(f"redeem: нет token_id для market {market_id}")
+        return False
+
+    try:
+        from py_clob_client.client import ClobClient
+
+        sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
+        clob_kwargs = dict(key=_key, chain_id=137, signature_type=sig_type)
+
+        funder = os.environ.get("POLYMARKET_FUNDER", "")
+        if funder and funder.startswith("0x"):
+            clob_kwargs["funder"] = funder
+
+        client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
+
+        raw_creds = client.create_or_derive_api_creds()
+        if isinstance(raw_creds, dict):
+            from py_clob_client.clob_types import ApiCreds
+            raw_creds = ApiCreds(
+                api_key        = raw_creds["api_key"],
+                api_secret     = raw_creds["api_secret"],
+                api_passphrase = raw_creds["api_passphrase"],
+            )
+        client.set_api_creds(raw_creds)
+
+        # Попытка 1: нативный redeem
+        if hasattr(client, "redeem_positions"):
+            result = client.redeem_positions(token_id=token_id)
+            log.info(f"Redeem OK (native): market={market_id[:12]} result={result}")
+            return True
+
+        # Попытка 2: HTTP redeem endpoint
+        headers = client.get_headers("POST", "/redeem")
+        resp = requests.post(
+            f"{CLOB}/redeem",
+            json={"token_id": token_id},
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            log.info(f"Redeem OK (HTTP): market={market_id[:12]} | {resp.text[:80]}")
+            return True
+        else:
+            log.warning(f"Redeem HTTP {resp.status_code}: {resp.text[:120]}")
+
+        # Попытка 3: SELL winning shares по рыночной цене
+        try:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.order_builder.constants import SELL
+            sell_order = MarketOrderArgs(
+                token_id   = token_id,
+                amount     = shares,
+                side       = SELL,
+                order_type = OrderType.FAK,
+            )
+            signed = client.create_market_order(sell_order)
+            result = client.post_order(signed, OrderType.FAK)
+            log.info(f"Redeem via SELL OK: market={market_id[:12]} | {result}")
+            return True
+        except Exception as sell_err:
+            log.debug(f"Redeem SELL fallback failed: {sell_err}")
+
+        return False
+
+    except ImportError:
+        log.error("redeem: py-clob-client не установлен")
+        return False
+    except Exception as e:
+        log.error(f"redeem error market={market_id}: {e}", exc_info=True)
+        return False
+
+
 class PositionResolver:
     def __init__(self, risk_manager, telegram=None):
         self.risk = risk_manager
-        # telegram может быть объектом Telegram или функцией send
         self.tg   = telegram
         self._signal_outcomes: list[dict] = []
 
@@ -72,7 +208,6 @@ class PositionResolver:
         if not self.tg:
             return
         try:
-            # Строим URL - используем /?s= поиск который никогда не 404
             import urllib.parse as _up
             slug = getattr(pos, 'slug', None)
             if slug:
@@ -94,7 +229,6 @@ class PositionResolver:
                     url         = pm_url,
                 )
             else:
-                # Fallback: tg — это функция send()
                 icon   = "✅" if won else ("🛑" if outcome == "STOP_LOSS" else "❌")
                 result = "WIN" if won else ("STOP-LOSS" if outcome == "STOP_LOSS" else "LOSS")
                 pnl_s  = f"+${pnl:.2f}" if won else f"−${abs(pnl):.2f}"
@@ -116,37 +250,88 @@ class PositionResolver:
         if not open_pos:
             return []
 
+        poly_key   = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
         closed_now = []
-        for pos in open_pos:
-            cur_price = get_current_price(pos.token_id) if pos.token_id else None
 
-            # 1. Резолюция рынка
-            outcome = check_market_outcome(pos.market_id, current_price=cur_price)
+        for pos in open_pos:
+            # Цена НАШЕГО токена — для stop-loss
+            cur_token_price = get_current_price(pos.token_id) if pos.token_id else None
+
+            # YES-цена рынка — для определения исхода
+            yes_price = get_yes_price(pos.market_id)
+
+            # 1. Проверка резолюции рынка
+            outcome = check_market_outcome(pos.market_id, current_price=yes_price)
+
             if outcome is not None:
                 won = (
                     (pos.direction == "YES" and outcome == "YES") or
                     (pos.direction == "NO"  and outcome == "NO")
                 )
-                exit_p  = 1.0 if won else 0.0
-                closed  = self.risk.close(pos.market_id, exit_price=exit_p, won=won)
+                exit_p = 1.0 if won else 0.0
+                closed = self.risk.close(pos.market_id, exit_price=exit_p, won=won)
+
                 if closed:
                     closed_now.append(self._make_closed_dict(pos, outcome, won, closed.pnl))
                     self._notify(pos, outcome, won, closed.pnl, exit_p)
-                    log.info(f"{'WIN' if won else 'LOSS'} | {pos.question[:50]} | P&L ${closed.pnl:+.2f}")
+                    log.info(
+                        f"{'WIN ✅' if won else 'LOSS ❌'} | "
+                        f"direction={pos.direction} outcome={outcome} | "
+                        f"{pos.question[:50]} | P&L ${closed.pnl:+.2f}"
+                    )
+
+                    # ── REDEEM: забираем выигрыш на баланс ─────────────────
+                    if won and poly_key and pos.token_id:
+                        shares = pos.size_usd / max(pos.entry_price, 0.001)
+                        log.info(
+                            f"💰 Redeem: market={pos.market_id[:12]} "
+                            f"token={pos.token_id[:12]} shares≈{shares:.1f}"
+                        )
+                        ok = redeem_winning_position(
+                            market_id = pos.market_id,
+                            token_id  = pos.token_id,
+                            shares    = shares,
+                            poly_key  = poly_key,
+                        )
+                        if not ok:
+                            log.warning(
+                                f"⚠️ Redeem не удался для {pos.market_id[:16]} — "
+                                f"нужно клеймить вручную на Polymarket"
+                            )
+                            if self.tg:
+                                try:
+                                    import urllib.parse as _up
+                                    slug = getattr(pos, 'slug', None)
+                                    url  = (f"https://polymarket.com/event/{slug}"
+                                            if slug
+                                            else f"https://polymarket.com/?s={_up.quote((pos.question or '')[:80])}")
+                                    msg = (
+                                        f"⚠️ *Redeem не удался*\n\n"
+                                        f"*{pos.question[:70]}*\n\n"
+                                        f"Выигрыш: *+${closed.pnl:.2f}*\n"
+                                        f"Зайди и клейм вручную:\n"
+                                        f"🔗 [Открыть на Polymarket]({url})"
+                                    )
+                                    if hasattr(self.tg, "send"):
+                                        self.tg.send(msg)
+                                    else:
+                                        self.tg(msg)
+                                except Exception:
+                                    pass
                 continue
 
-            # 2. Stop-loss — потеряли 40%+ от входной цены
-            if cur_price is not None and cur_price > 0:
+            # 2. Stop-loss — потеряли 40%+ от входной цены нашего токена
+            if cur_token_price is not None and cur_token_price > 0:
                 entry_token   = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-                current_token = cur_price       if pos.direction == "YES" else 1.0 - cur_price
+                current_token = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
                 loss_pct = (entry_token - current_token) / entry_token if entry_token > 0 else 0
 
                 if loss_pct >= 0.40:
                     pnl    = round((current_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
-                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=cur_price, pnl=pnl)
+                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=cur_token_price, pnl=pnl)
                     if closed:
                         closed_now.append(self._make_closed_dict(pos, "STOP_LOSS", False, pnl))
-                        self._notify(pos, "STOP_LOSS", False, pnl, cur_price, loss_pct)
+                        self._notify(pos, "STOP_LOSS", False, pnl, cur_token_price, loss_pct)
                         log.info(f"🛑 STOP-LOSS | {pos.question[:50]} | -{loss_pct:.0%} | P&L ${pnl:+.2f}")
 
         self._signal_outcomes.extend(closed_now)
