@@ -1,48 +1,53 @@
 """
-Тест баланса Polymarket CLOB - v2
+Тест баланса - v3
 """
-import os, requests
+import os, requests as req
 
 def main():
     private_key = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
     funder      = os.environ.get("POLYMARKET_FUNDER", "")
-
     if not private_key.startswith("0x"):
         private_key = "0x" + private_key
-
     print(f"Funder: {funder}")
 
     from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import ApiCreds
 
-    # Проверяем все доступные методы
-    c = ClobClient("https://clob.polymarket.com", key=private_key, chain_id=137,
-                   signature_type=0, funder=funder)
-    c.set_api_creds(c.create_or_derive_api_creds())
-
-    methods = [m for m in dir(c) if 'balance' in m.lower() or 'allowance' in m.lower()]
-    print(f"\nДоступные методы: {methods}")
-
-    # Пробуем get_balance_allowance
-    for method_name in methods:
-        print(f"\n--- {method_name} ---")
-        try:
-            method = getattr(c, method_name)
-            result = method()
-            print(f"Result: {result}")
-        except Exception as e:
-            print(f"Error: {e}")
-
-    # Прямой HTTP запрос
-    print("\n--- Direct HTTP /balance-allowance ---")
+    # Step 1: Get creds using EOA only (no funder)
+    print("\n--- Getting API creds ---")
+    c0 = ClobClient("https://clob.polymarket.com", key=private_key, chain_id=137)
     try:
-        headers = c.get_headers("GET", "/balance-allowance")
-        r = requests.get("https://clob.polymarket.com/balance-allowance",
-                        params={"asset_type": "USDC", "signature_type": "0"},
-                        headers=headers, timeout=10)
-        print(f"Status: {r.status_code}")
-        print(f"Response: {r.text[:500]}")
+        creds = c0.create_or_derive_api_creds()
+        print(f"Creds type: {type(creds)}")
+        print(f"Creds: {creds}")
+    except Exception as e:
+        print(f"Creds error: {e}")
+        creds = None
+
+    # Step 2: Use creds with funder
+    print("\n--- Testing with creds + funder ---")
+    try:
+        c1 = ClobClient("https://clob.polymarket.com", key=private_key, chain_id=137,
+                       signature_type=0, funder=funder)
+        if creds:
+            c1.set_api_creds(creds)
+        bal = c1.get_balance_allowance(params={"asset_type": "USDC", "signature_type": 0})
+        print(f"Balance: {bal}")
     except Exception as e:
         print(f"Error: {e}")
+
+    # Step 3: Direct HTTP with L1 auth
+    print("\n--- Direct HTTP ---")
+    try:
+        import time
+        from py_clob_client.signing.hmac import create_l1_headers
+        headers = create_l1_headers(private_key, "GET", "/balance-allowance", None, int(time.time()))
+        r = req.get("https://clob.polymarket.com/balance-allowance",
+                   params={"asset_type": "USDC", "signature_type": "0"},
+                   headers=headers, timeout=10)
+        print(f"Status: {r.status_code} | {r.text[:300]}")
+    except Exception as e:
+        print(f"HTTP error: {e}")
 
     print("\nDone.")
 
