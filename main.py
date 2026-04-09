@@ -56,13 +56,15 @@ def _execute(market: Market, direction: str,
         # signature_type: 0=EOA, 1=EOA via proxy, 2=magic link
         # Default 0 works for standard MetaMask EOA wallets
         sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
-        client = ClobClient(
-            "https://clob.polymarket.com",
+        # Only pass funder if it's set - for EOA mode (sig_type=0) funder is not needed
+        clob_kwargs = dict(
             key=cfg.poly_key,
             chain_id=137,
             signature_type=sig_type,
-            funder=cfg.poly_funder,
         )
+        if cfg.poly_funder and cfg.poly_funder.startswith("0x"):
+            clob_kwargs["funder"] = cfg.poly_funder
+        client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
         # Inject proxy into the underlying session if available
         if proxies and hasattr(client, "session"):
             client.session.proxies.update(proxies)
