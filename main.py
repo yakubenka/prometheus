@@ -83,6 +83,8 @@ def _execute(market: Market, direction: str,
                 api_passphrase = raw_creds["api_passphrase"],
             )
         client.set_api_creds(raw_creds)
+        import time as _time
+        _time.sleep(1)  # Small pause after creds creation
 
         # Check CLOB balance - detailed logging for debugging
         try:
