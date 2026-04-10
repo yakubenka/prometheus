@@ -346,15 +346,25 @@ class WalletAnalyzer:
         # Специализация в geo/politics — классические инсайдерские домены
         if {"geopolitics", "politics"} & set(p.specializations):
             score += 0.20
-        # Big upsets — ключевой признак инсайдера
+        # Big upsets — ключевой признак инсайдера (цена <= 20%, выиграл)
         if p.big_upsets >= 5:   score += 0.30
         elif p.big_upsets >= 3: score += 0.20
         elif p.big_upsets >= 1: score += 0.10
-        # Speed score — входит рано
+        # Speed score — входит рано когда цена ещё низкая
         score += p.speed_score * 0.15
         # Объём — инсайдеры ставят серьёзные деньги
         if p.total_volume > 200_000: score += 0.15
         elif p.total_volume > 50_000: score += 0.08
+        # НОВОЕ: бонус если трейдер стабильно выигрывает на ценах <= 10¢
+        ultra_low_wins = sum(
+            1 for t in trades
+            if t.price <= 0.10
+            and t.side == "BUY"
+            and t.outcome == "YES"
+            and t.size >= 500
+        )
+        if ultra_low_wins >= 3: score += 0.20
+        elif ultra_low_wins >= 1: score += 0.10
         return min(1.0, score)
 
     def _sharp_score(self, p: WalletProfile) -> float:
@@ -479,6 +489,23 @@ class SmartMoneyMonitor:
 
         direction = "YES" if trade.side == "BUY" else "NO"
         our_size  = round(min(self.max_position_usd * strength, self.max_position_usd), 2)
+
+        # HIGH-UPSIDE BONUS: если инсайдер ставит на цену <= 10¢
+        # потенциал x10+ → увеличиваем размер до 1.5x, но не более $30
+        token_price = trade.price if direction == "YES" else 1.0 - trade.price
+        is_high_upside = (
+            token_price <= 0.10
+            and profile.trader_class == TraderClass.INSIDER
+            and profile.big_upsets >= 1
+            and trade.size >= 2000  # инсайдер сам поставил серьёзно
+        )
+        if is_high_upside:
+            our_size = round(min(our_size * 1.5, min(self.max_position_usd * 1.5, 30.0)), 2)
+            log.info(
+                f"  🎯 HIGH-UPSIDE: price={token_price:.1%} "
+                f"upside=x{1/max(token_price,0.01):.0f} "
+                f"size bumped to ${our_size:.2f}"
+            )
 
         stype = (
             "insider_bet"  if profile.trader_class == TraderClass.INSIDER else
