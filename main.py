@@ -75,18 +75,29 @@ def _execute(market: Market, direction: str,
             if hasattr(client, "_session"):
                 client._session = _session
 
-        # Fix: create_or_derive_api_creds may return dict or ApiCreds object
-        raw_creds = client.create_or_derive_api_creds()
-        if isinstance(raw_creds, dict):
+        # Используем Relayer API Key если задан (signature_type=2)
+        relayer_api_key = os.environ.get("POLYMARKET_RELAYER_API_KEY", "")
+        import time as _time
+        if sig_type == 2 and relayer_api_key:
             from py_clob_client.clob_types import ApiCreds
             raw_creds = ApiCreds(
-                api_key        = raw_creds["api_key"],
-                api_secret     = raw_creds["api_secret"],
-                api_passphrase = raw_creds["api_passphrase"],
+                api_key        = relayer_api_key,
+                api_secret     = relayer_api_key,
+                api_passphrase = relayer_api_key,
             )
-        client.set_api_creds(raw_creds)
-        import time as _time
-        _time.sleep(1)  # Small pause after creds creation
+            client.set_api_creds(raw_creds)
+            log.info(f"Relayer API Key: {relayer_api_key[:8]}...")
+        else:
+            raw_creds = client.create_or_derive_api_creds()
+            if isinstance(raw_creds, dict):
+                from py_clob_client.clob_types import ApiCreds
+                raw_creds = ApiCreds(
+                    api_key        = raw_creds["api_key"],
+                    api_secret     = raw_creds["api_secret"],
+                    api_passphrase = raw_creds["api_passphrase"],
+                )
+            client.set_api_creds(raw_creds)
+        _time.sleep(1)
 
         # Check CLOB balance - detailed logging for debugging
         try:
