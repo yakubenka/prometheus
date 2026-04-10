@@ -92,8 +92,10 @@ class SmartSignal:
     strength:    float
     signal_type: str
     reasoning:   str
-    minutes_ago: float = 0.0   # как давно инсайдер вошёл
+    minutes_ago: float = 0.0
     timestamp:   datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    token_id:    str = ""    # token_id нашей стороны (YES или NO)
+    slug:        str = ""    # slug для прямой ссылки на Polymarket
 
 
 # ── Outcome enrichment ────────────────────────────────────────────────────────
@@ -506,6 +508,27 @@ class SmartMoneyMonitor:
             + (f"  · {profile.big_upsets} big upsets" if profile.big_upsets else "")
         )
 
+        # Получаем token_id и slug по market_id через Gamma API
+        _token_id = ""
+        _slug     = ""
+        try:
+            import requests as _req
+            _r = _req.get(f"https://gamma-api.polymarket.com/markets/{trade.market_id}", timeout=5)
+            if _r.status_code == 200:
+                _m = _r.json()
+                _slug = _m.get("groupSlug") or _m.get("marketSlug") or _m.get("slug") or ""
+                _tokens = _m.get("clobTokenIds") or []
+                if isinstance(_tokens, str):
+                    import json as _json
+                    _tokens = _json.loads(_tokens)
+                # tokens[0] = YES, tokens[1] = NO
+                if direction == "YES" and len(_tokens) >= 1:
+                    _token_id = str(_tokens[0])
+                elif direction == "NO" and len(_tokens) >= 2:
+                    _token_id = str(_tokens[1])
+        except Exception as _e:
+            log.debug(f"SM token_id fetch failed: {_e}")
+
         return SmartSignal(
             wallet      = profile,
             market_id   = trade.market_id,
@@ -518,6 +541,8 @@ class SmartMoneyMonitor:
             signal_type = stype,
             reasoning   = reasoning,
             minutes_ago = minutes_ago,
+            token_id    = _token_id,
+            slug        = _slug,
         )
 
     def _strength(

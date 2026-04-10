@@ -34,23 +34,37 @@ class Telegram:
     def send(self, text: str, silent: bool = False) -> bool:
         if not self.enabled:
             return False
-        try:
-            r = _SESSION.post(
-                f"{self._base}/sendMessage",
-                json={
-                    "chat_id":              self.chat_id,
-                    "text":                 text[:4096],
-                    "parse_mode":           "Markdown",
-                    "disable_notification": silent,
-                },
-                timeout=8,
-            )
-            if r.status_code == 200:
-                return True
-            log.warning(f"Telegram HTTP {r.status_code}: {r.text[:200]}")
-            return False
-        except Exception as e:
-            log.warning(f"Telegram error: {e}")
+        import time as _time
+        for attempt in range(3):  # 3 попытки
+            try:
+                r = _SESSION.post(
+                    f"{self._base}/sendMessage",
+                    json={
+                        "chat_id":              self.chat_id,
+                        "text":                 text[:4096],
+                        "parse_mode":           "Markdown",
+                        "disable_notification": silent,
+                    },
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    return True
+                if r.status_code == 429:
+                    # Flood limit — ждём сколько Telegram говорит
+                    retry_after = 5
+                    try:
+                        retry_after = r.json().get("parameters", {}).get("retry_after", 5)
+                    except Exception:
+                        pass
+                    log.warning(f"Telegram flood limit — ждём {retry_after}с (попытка {attempt+1}/3)")
+                    _time.sleep(retry_after)
+                    continue
+                log.warning(f"Telegram HTTP {r.status_code}: {r.text[:200]}")
+                return False
+            except Exception as e:
+                log.warning(f"Telegram error (попытка {attempt+1}/3): {e}")
+                if attempt < 2:
+                    _time.sleep(3)
         return False
 
     # ── Система ───────────────────────────────────────────────────────────────

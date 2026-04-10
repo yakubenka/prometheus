@@ -401,20 +401,26 @@ class Prometheus:
                 log.info(f"SM risk block: {decision.reason}")
                 continue
 
-            # Smart money execution использует Market-like объект
+            # Smart money execution — используем token_id из сигнала
             class _Mkt:
-                question    = sig.question
-                token_id_yes = None
-                token_id_no  = None
+                question     = sig.question
+                token_id_yes = sig.token_id if sig.direction == "YES" else None
+                token_id_no  = sig.token_id if sig.direction == "NO"  else None
 
             if _execute(_Mkt(), sig.direction, decision.size_usd, sig.entry_price):
-                self.risk.open(sig.market_id, sig.question, sig.direction,
-                               sig.entry_price, decision.size_usd,
-                               list(sig.wallet.specializations), "smart_money")
+                self.risk.open(
+                    sig.market_id, sig.question, sig.direction,
+                    sig.entry_price, decision.size_usd,
+                    list(sig.wallet.specializations), "smart_money",
+                    token_id = sig.token_id or None,
+                    slug     = sig.slug     or None,
+                )
                 sm_trades += 1
                 # Строим URL для Smart Money сигнала
                 import urllib.parse as _up
-                _sm_url = f"https://polymarket.com/?s={_up.quote(sig.question[:100])}"
+                _sm_url = (f"https://polymarket.com/event/{sig.slug}"
+                           if sig.slug
+                           else f"https://polymarket.com/?s={_up.quote(sig.question[:100])}")
                 self.tg.insider_detected(
                     question     = sig.question,
                     direction    = sig.direction,
