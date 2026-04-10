@@ -298,14 +298,28 @@ class SignalEngine:
 
         with ThreadPoolExecutor(max_workers=6) as executor:
             futures = {executor.submit(fn): name for name, fn in tasks.items()}
-            for future in as_completed(futures, timeout=30):
-                name = futures[future]
-                try:
-                    results[name] = future.result()
-                except Exception as e:
-                    log.debug(f"Signal {name} failed: {e}")
-                    results[name] = Signal(name, market.yes_price, 0.10,
-                                           "NEUTRAL", "error")
+            try:
+                for future in as_completed(futures, timeout=45):
+                    name = futures[future]
+                    try:
+                        results[name] = future.result()
+                    except Exception as e:
+                        log.debug(f"Signal {name} failed: {e}")
+                        results[name] = Signal(name, market.yes_price, 0.10,
+                                               "NEUTRAL", "error")
+            except Exception as timeout_err:
+                # Некоторые futures не завершились вовремя — используем что есть
+                log.debug(f"Signals timeout: {timeout_err}")
+                for future, name in futures.items():
+                    if name not in results:
+                        if future.done():
+                            try:
+                                results[name] = future.result()
+                            except Exception:
+                                pass
+                        if name not in results:
+                            results[name] = Signal(name, market.yes_price, 0.10,
+                                                   "NEUTRAL", "error")
 
         # Возвращаем в фиксированном порядке
         return [results.get(name, Signal(name, market.yes_price, 0.10, "NEUTRAL", "error"))
