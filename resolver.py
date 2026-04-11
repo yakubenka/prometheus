@@ -19,6 +19,68 @@ import requests
 
 from data import fetch_current_price
 
+
+def sell_position_on_polymarket(token_id: str, shares: float,
+                                poly_key: str = None) -> tuple[bool, float]:
+    """
+    Продать токены на Polymarket по рыночной цене (SELL FAK ордер).
+    Используется для stop-loss, take-profit и закрытия позиций.
+    
+    Returns:
+        (success, actual_price)
+    """
+    import os as _os
+    _key = poly_key or _os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+    if not _key or not token_id or shares <= 0:
+        log.warning(f"sell: невозможно продать — key={bool(_key)} token={bool(token_id)} shares={shares}")
+        return False, 0.0
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import MarketOrderArgs, OrderType, ApiCreds
+        from py_clob_client.order_builder.constants import SELL
+        import time as _time
+
+        sig_type = int(_os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
+        clob_kwargs = dict(key=_key, chain_id=137, signature_type=sig_type)
+        funder = _os.environ.get("POLYMARKET_FUNDER", "")
+        if funder and funder.startswith("0x"):
+            clob_kwargs["funder"] = funder
+
+        client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
+        raw_creds = client.create_or_derive_api_creds()
+        if isinstance(raw_creds, dict):
+            raw_creds = ApiCreds(
+                api_key        = raw_creds["api_key"],
+                api_secret     = raw_creds["api_secret"],
+                api_passphrase = raw_creds["api_passphrase"],
+            )
+        client.set_api_creds(raw_creds)
+        _time.sleep(1)
+
+        # Текущая цена
+        current_price = 0.0
+        try:
+            r = requests.get(f"{CLOB}/midpoint", params={"token_id": token_id}, timeout=5)
+            if r.status_code == 200:
+                current_price = float(r.json().get("mid", 0))
+        except Exception:
+            pass
+
+        sell_order = MarketOrderArgs(
+            token_id   = token_id,
+            amount     = shares,
+            side       = SELL,
+            order_type = OrderType.FAK,
+        )
+        signed = client.create_market_order(sell_order)
+        result = client.post_order(signed, OrderType.FAK)
+        log.info(f"✅ SELL OK: token={token_id[:12]} shares≈{shares:.1f} @ {current_price:.3f} | {result}")
+        return True, current_price
+
+    except Exception as e:
+        log.error(f"SELL failed token={token_id[:12]}: {e}")
+        return False, 0.0
+
 log = logging.getLogger("prometheus.resolver")
 
 GAMMA = "https://gamma-api.polymarket.com"
@@ -196,6 +258,83 @@ def redeem_winning_position(market_id: str, token_id: str,
         return False
 
 
+def fetch_polymarket_positions(funder_address: str) -> dict[str, dict]:
+    """
+    Получить реальные открытые позиции с Polymarket по адресу кошелька.
+    Возвращает словарь {token_id: {size, price, market_id}}
+    """
+    if not funder_address:
+        return {}
+    try:
+        r = requests.get(
+            "https://data-api.polymarket.com/positions",
+            params={"user": funder_address, "sizeThreshold": "0.01"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return {}
+        positions = {}
+        for item in r.json():
+            token_id = item.get("asset") or item.get("token_id", "")
+            if token_id:
+                positions[token_id] = {
+                    "size":      float(item.get("size", 0)),
+                    "avg_price": float(item.get("avgPrice", 0)),
+                    "market_id": item.get("conditionId", ""),
+                    "cur_price": float(item.get("curPrice", 0)),
+                }
+        return positions
+    except Exception as e:
+        log.debug(f"fetch_polymarket_positions error: {e}")
+        return {}
+
+
+def verify_position_closed(token_id: str, funder: str,
+                            retries: int = 3, wait_sec: int = 10) -> bool:
+    """
+    Проверить что позиция реально закрылась на Polymarket.
+    Опрашивает Data API несколько раз с паузой.
+    
+    Returns:
+        True — позиция закрыта (balance = 0)
+        False — позиция ещё открыта
+    """
+    if not token_id or not funder:
+        return False
+    
+    import time as _time
+    
+    for attempt in range(retries):
+        try:
+            r = requests.get(
+                "https://data-api.polymarket.com/positions",
+                params={"user": funder, "sizeThreshold": "0.01"},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                positions = r.json()
+                # Ищем наш токен — если его нет или size=0 → закрыто
+                for item in positions:
+                    if item.get("asset") == token_id or item.get("token_id") == token_id:
+                        size = float(item.get("size", 0))
+                        if size > 0.01:
+                            log.debug(f"verify: позиция ещё открыта size={size:.2f} (попытка {attempt+1}/{retries})")
+                            if attempt < retries - 1:
+                                _time.sleep(wait_sec)
+                            continue
+                # Токен не найден → закрыто
+                log.info(f"✅ verify: позиция подтверждена закрытой на Polymarket")
+                return True
+        except Exception as e:
+            log.debug(f"verify error: {e}")
+        
+        if attempt < retries - 1:
+            _time.sleep(wait_sec)
+    
+    log.warning(f"⚠️ verify: позиция НЕ закрыта после {retries} проверок")
+    return False
+
+
 class PositionResolver:
     def __init__(self, risk_manager, telegram=None):
         self.risk = risk_manager
@@ -251,7 +390,15 @@ class PositionResolver:
             return []
 
         poly_key   = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+        funder     = os.environ.get("POLYMARKET_FUNDER", "")
         closed_now = []
+
+        # Синхронизация с реальными позициями на Polymarket
+        real_positions = {}
+        if funder:
+            real_positions = fetch_polymarket_positions(funder)
+            if real_positions:
+                log.info(f"📡 Polymarket: {len(real_positions)} реальных позиций")
 
         for pos in open_pos:
             # Цена НАШЕГО токена — для stop-loss
@@ -327,11 +474,36 @@ class PositionResolver:
                 loss_pct = (entry_token - current_token) / entry_token if entry_token > 0 else 0
 
                 if loss_pct >= 0.40:
-                    pnl    = round((current_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
-                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=cur_token_price, pnl=pnl)
+                    pnl = round((current_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
+                    
+                    # Реально продаём токены на Polymarket
+                    shares = pos.size_usd / max(pos.entry_price, 0.001)
+                    sold, actual_price = False, cur_token_price
+                    if pos.token_id and poly_key:
+                        sold, actual_price = sell_position_on_polymarket(
+                            token_id = pos.token_id,
+                            shares   = shares,
+                            poly_key = poly_key,
+                        )
+                        if not sold:
+                            log.warning(f"⚠️ STOP-LOSS sell failed — позиция НЕ закрыта на Polymarket: {pos.question[:40]}")
+                            continue  # Не закрываем в базе если продажа не прошла
+                        
+                        # Проверяем что позиция реально закрылась
+                        confirmed = verify_position_closed(
+                            token_id = pos.token_id,
+                            funder   = os.environ.get("POLYMARKET_FUNDER", ""),
+                            retries  = 3,
+                            wait_sec = 10,
+                        )
+                        if not confirmed:
+                            log.warning(f"⚠️ STOP-LOSS: продажа отправлена но позиция ещё видна — пропускаем: {pos.question[:40]}")
+                            continue
+                    
+                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=actual_price, pnl=pnl)
                     if closed:
                         closed_now.append(self._make_closed_dict(pos, "STOP_LOSS", False, pnl))
-                        self._notify(pos, "STOP_LOSS", False, pnl, cur_token_price, loss_pct)
+                        self._notify(pos, "STOP_LOSS", False, pnl, actual_price, loss_pct)
                         log.info(f"🛑 STOP-LOSS | {pos.question[:50]} | -{loss_pct:.0%} | P&L ${pnl:+.2f}")
 
         self._signal_outcomes.extend(closed_now)

@@ -420,8 +420,61 @@ class PositionReviewer:
 
     def _close_position(self, pos, current_price: float,
                         reason: str) -> bool:
-        """Закрыть позицию по текущей цене."""
-        upnl   = _calc_unrealised_pnl(pos, current_price)
+        """
+        Закрыть позицию:
+        1. Реально продаём токены на Polymarket
+        2. Только если продажа прошла — закрываем в базе
+        """
+        import os as _os
+        upnl = _calc_unrealised_pnl(pos, current_price)
+        
+        # Пытаемся реально продать на Polymarket
+        poly_key = _os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+        if pos.token_id and poly_key:
+            try:
+                from resolver import sell_position_on_polymarket
+                shares = pos.size_usd / max(pos.entry_price, 0.001)
+                sold, actual_price = sell_position_on_polymarket(
+                    token_id = pos.token_id,
+                    shares   = shares,
+                    poly_key = poly_key,
+                )
+                if not sold:
+                    log.warning(
+                        f"⚠️ {reason}: продажа на Polymarket не прошла — "
+                        f"позиция НЕ закрыта в базе: {pos.question[:40]}"
+                    )
+                    return False
+                
+                # Проверяем что позиция реально закрылась на Polymarket
+                funder = _os.environ.get("POLYMARKET_FUNDER", "")
+                try:
+                    from resolver import verify_position_closed
+                    confirmed = verify_position_closed(
+                        token_id  = pos.token_id,
+                        funder    = funder,
+                        retries   = 3,
+                        wait_sec  = 10,
+                    )
+                    if not confirmed:
+                        log.warning(
+                            f"⚠️ {reason}: продажа отправлена но позиция "
+                            f"ещё видна на Polymarket — попробуем позже: {pos.question[:40]}"
+                        )
+                        return False
+                except Exception as ve:
+                    log.debug(f"verify error: {ve}")
+                    # Если не можем проверить — доверяем результату продажи
+                
+                # Используем реальную цену продажи
+                current_price = actual_price if actual_price > 0 else current_price
+                upnl = _calc_unrealised_pnl(pos, current_price)
+            except Exception as e:
+                log.error(f"sell_position error: {e}")
+                return False
+        else:
+            log.warning(f"⚠️ {reason}: нет token_id или private_key — закрываем только в базе")
+
         closed = self.risk.close_with_pnl(
             pos.market_id,
             exit_price = current_price,
