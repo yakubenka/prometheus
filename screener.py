@@ -158,6 +158,100 @@ def _price_extremity(market: Market) -> float:
     return 0.2
 
 
+def _extract_match_key(question: str) -> Optional[str]:
+    """
+    Извлекает ключ матча из вопроса.
+    "Will Atletico win on 2026-04-11?" и "Will Sevilla win on 2026-04-11?"
+    → один и тот же матч если дата совпадает и это футбол.
+    Возвращает нормализованный ключ или None.
+    """
+    import re
+    q = question.lower()
+    
+    # Ищем дату в вопросе
+    date_match = re.search(r'20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]', q)
+    if not date_match:
+        return None
+    
+    date_str = date_match.group(0)
+    
+    # Паттерны одиночных исходов матча
+    patterns = [
+        r'will (.+?) win on',       # "Will X win on DATE"
+        r'will (.+?) win the',      # "Will X win the match"
+        r'will (.+?) beat',         # "Will X beat Y"
+        r'(.+?) vs\.? (.+?) winner', # "X vs Y winner"
+    ]
+    
+    for pat in patterns:
+        m = re.search(pat, q)
+        if m:
+            # Возвращаем дату как ключ — все маркеты одного дня одного турнира
+            # считаем связанными
+            return date_str
+    
+    return None
+
+
+def _deduplicate_same_match(results: list["ScreenResult"],
+                             open_positions: list = None) -> list["ScreenResult"]:
+    """
+    Убираем дублирующие маркеты одного матча.
+    Если два маркета — "Will A win on DATE?" и "Will B win on DATE?"
+    с похожим контекстом — оставляем только один (с лучшим score).
+    
+    Также проверяем уже открытые позиции — не берём второй исход того же матча.
+    """
+    open_positions = open_positions or []
+    
+    # Собираем ключи уже открытых позиций
+    open_match_keys = set()
+    for pos in open_positions:
+        key = _extract_match_key(pos.question or "")
+        if key:
+            # Берём дату + первые слова вопроса как ключ
+            words = (pos.question or "").lower().split()[:3]
+            open_match_keys.add(key + "_" + "_".join(words[:2]))
+    
+    seen_match_keys: dict = {}
+    deduped = []
+    
+    for r in results:
+        key = _extract_match_key(r.market.question)
+        if not key:
+            deduped.append(r)
+            continue
+        
+        # Используем дату + первые слова как уникальный ключ контекста
+        words = r.market.question.lower().split()
+        # Убираем стоп-слова
+        stop = {"will", "the", "a", "an", "on", "in", "by", "win", "be"}
+        content_words = [w for w in words if w not in stop and len(w) > 2][:3]
+        context_key = key + "_" + "_".join(content_words[:2])
+        
+        # Проверяем не открыта ли уже позиция по этому матчу
+        if context_key in open_match_keys:
+            log.debug(f"  Skip — позиция уже открыта на этот матч: {r.market.question[:50]}")
+            continue
+        
+        if context_key not in seen_match_keys:
+            seen_match_keys[context_key] = r
+            deduped.append(r)
+        else:
+            # Уже есть маркет этого матча — берём лучший score
+            existing = seen_match_keys[context_key]
+            if r.pre_score > existing.pre_score:
+                deduped.remove(existing)
+                seen_match_keys[context_key] = r
+                deduped.append(r)
+            log.debug(
+                f"  Dedup same match: '{r.market.question[:40]}' vs "
+                f"'{existing.market.question[:40]}'"
+            )
+    
+    return deduped
+
+
 def screen(markets: list[Market], top_n: int = 10,
            fetch_kalshi: bool = False) -> list[ScreenResult]:
     """
@@ -240,6 +334,9 @@ def screen(markets: list[Market], top_n: int = 10,
         ))
 
     results.sort(key=lambda x: x.pre_score, reverse=True)
+
+    # Дедупликация — убираем второй исход одного матча
+    results = _deduplicate_same_match(results)
 
     # Diversity boost: не берём больше 3 рынков одного тега в топ
     top     = _apply_diversity(results, top_n)
