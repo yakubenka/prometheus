@@ -75,29 +75,20 @@ def _execute(market: Market, direction: str,
             if hasattr(client, "_session"):
                 client._session = _session
 
-        # Используем Relayer API Key если задан (signature_type=2)
-        relayer_api_key = os.environ.get("POLYMARKET_RELAYER_API_KEY", "")
+        # Деривируем L2 API credentials из приватного ключа
+        # Работает для signature_type=0 (EOA) и signature_type=2 (Safe proxy)
         import time as _time
-        if sig_type == 2 and relayer_api_key:
+        raw_creds = client.create_or_derive_api_creds()
+        if isinstance(raw_creds, dict):
             from py_clob_client.clob_types import ApiCreds
             raw_creds = ApiCreds(
-                api_key        = relayer_api_key,
-                api_secret     = relayer_api_key,
-                api_passphrase = relayer_api_key,
+                api_key        = raw_creds["api_key"],
+                api_secret     = raw_creds["api_secret"],
+                api_passphrase = raw_creds["api_passphrase"],
             )
-            client.set_api_creds(raw_creds)
-            log.info(f"Relayer API Key: {relayer_api_key[:8]}...")
-        else:
-            raw_creds = client.create_or_derive_api_creds()
-            if isinstance(raw_creds, dict):
-                from py_clob_client.clob_types import ApiCreds
-                raw_creds = ApiCreds(
-                    api_key        = raw_creds["api_key"],
-                    api_secret     = raw_creds["api_secret"],
-                    api_passphrase = raw_creds["api_passphrase"],
-                )
-            client.set_api_creds(raw_creds)
-        _time.sleep(1)
+        client.set_api_creds(raw_creds)
+        log.info(f"L2 creds OK: {raw_creds.api_key[:8]}... sig_type={sig_type}")
+        _time.sleep(2)  # Пауза после деривирования — ключи активируются ~2 сек
 
         # Check CLOB balance - detailed logging for debugging
         try:
