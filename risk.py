@@ -94,6 +94,18 @@ class RiskManager:
         self._db_init()
         self._load()
 
+        # Очистка позиций при старте если задана переменная
+        import os as _os
+        if _os.environ.get("CLEAR_POSITIONS_ON_START", "").lower() in ("1", "true", "yes"):
+            open_count = len([p for p in self._positions if p.status == "open"])
+            if open_count > 0:
+                self._positions = [p for p in self._positions if p.status != "open"]
+                self._save()
+                import logging as _log
+                _log.getLogger("prometheus.risk").info(
+                    f"🧹 CLEAR_POSITIONS_ON_START: удалено {open_count} открытых позиций"
+                )
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def kelly_size(
