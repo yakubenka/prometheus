@@ -13,7 +13,7 @@ from anthropic import Anthropic
 import logger as _logger
 from config import cfg
 from telegram import Telegram
-from data import fetch_markets, Market
+from data import fetch_markets, Market, best_polymarket_url
 from risk import RiskManager, PendingAction
 from signals import SignalEngine, EnsembleResult, get_domain_min_edge, get_confidence_kelly_mult
 from smart_money import SmartMoneyMonitor
