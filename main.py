@@ -218,16 +218,7 @@ class Prometheus:
                 self._run_intel()
                 self._check_risk_alerts()
                 self._trade_cycle()
-
-                # Breaking news триггер — проверяем каждый цикл
-                # Если есть горячая новость и прошло >3 мин с последнего breaking цикла
-                breaking = self.intel.breaking_news(hours=0.1)  # последние 6 минут
-                if breaking and (time.time() - self._last_breaking) > 180:
-                    log.info(f"🚨 Breaking news detected! Triggering immediate cycle...")
-                    self.tg.breaking([dp.title for dp in breaking[:3]])
-                    self._resolve_positions()
-                    self._trade_cycle()
-                    self._last_breaking = time.time()
+                # Breaking notifications disabled: too noisy for live Telegram channel.
 
                 self._sleep(cfg.scan_interval)
 
@@ -955,15 +946,42 @@ class Prometheus:
                     api_passphrase=raw_creds["api_passphrase"],
                 )
             client.set_api_creds(raw_creds)
-            bal = client.get_balance()
+
             candidates = []
-            if isinstance(bal, dict):
-                for key in ("balance", "available", "available_balance", "free", "usdc", "total", "amount"):
-                    value = bal.get(key)
-                    if value is not None:
-                        candidates.append(value)
-            elif isinstance(bal, (int, float, str)):
-                candidates.append(bal)
+
+            # Some py-clob-client versions expose get_balance(), some do not.
+            if hasattr(client, "get_balance"):
+                try:
+                    bal = client.get_balance()
+                    if isinstance(bal, dict):
+                        for key in ("balance", "available", "available_balance", "free", "usdc", "total", "amount"):
+                            value = bal.get(key)
+                            if value is not None:
+                                candidates.append(value)
+                    elif isinstance(bal, (int, float, str)):
+                        candidates.append(bal)
+                except Exception:
+                    pass
+
+            # Fallback: use balance-allowance endpoint directly.
+            try:
+                resp = _r.get(
+                    "https://clob.polymarket.com/balance-allowance",
+                    params={"asset_type": "USDC"},
+                    headers=client.get_headers("GET", "/balance-allowance"),
+                    timeout=8,
+                )
+                if resp.ok:
+                    data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+                    for key in ("balance", "available", "available_balance", "free", "usdc", "total", "amount"):
+                        value = data.get(key) if isinstance(data, dict) else None
+                        if value is not None:
+                            candidates.append(value)
+                else:
+                    log.debug(f"balance-allowance status={resp.status_code}")
+            except Exception:
+                pass
+
             for raw in candidates:
                 try:
                     return float(raw)
@@ -972,6 +990,7 @@ class Prometheus:
         except Exception as e:
             log.warning(f"Live cash fetch error: {e}")
         return None
+
 
     def _push_to_api(self) -> None:
         """Отправить актуальные данные в API сервис."""
