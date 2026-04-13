@@ -374,7 +374,8 @@ class Prometheus:
         if cfg.dry_run or not cfg.poly_funder:
             return
         now = time.time()
-        if (now - self._last_reconcile) < cfg.reconcile_interval_sec:
+        last_reconcile = getattr(self, "_last_reconcile", 0.0)
+        if (now - last_reconcile) < cfg.reconcile_interval_sec:
             return
         self._last_reconcile = now
         try:
