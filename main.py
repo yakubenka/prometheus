@@ -190,8 +190,6 @@ class Prometheus:
             weakened_mult=cfg.strategy_weakened_size_mult,
             all_weak_min_usd=cfg.all_strategies_weak_min_usd,
         )
-        self._last_reconcile: float = 0.0
-        self._reconcile_interval_sec: float = float(getattr(cfg, "reconcile_interval_sec", 300))
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -938,6 +936,8 @@ class Prometheus:
 
     def _push_to_api(self) -> None:
         """Отправить актуальные данные в API сервис."""
+        import requests as _r
+
         api_url = (os.environ.get("API_PUSH_URL", "") or "").strip().rstrip("/")
         if api_url.endswith("/internal/push"):
             api_url = api_url[: -len("/internal/push")]
