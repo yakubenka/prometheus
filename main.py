@@ -190,6 +190,8 @@ class Prometheus:
             weakened_mult=cfg.strategy_weakened_size_mult,
             all_weak_min_usd=cfg.all_strategies_weak_min_usd,
         )
+        self._last_reconcile: float = 0.0
+        self._reconcile_interval_sec: float = float(getattr(cfg, "reconcile_interval_sec", 300))
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -375,7 +377,8 @@ class Prometheus:
             return
         now = time.time()
         last_reconcile = getattr(self, "_last_reconcile", 0.0)
-        if (now - last_reconcile) < cfg.reconcile_interval_sec:
+        reconcile_interval = float(getattr(self, "_reconcile_interval_sec", getattr(cfg, "reconcile_interval_sec", 300)))
+        if (now - last_reconcile) < reconcile_interval:
             return
         self._last_reconcile = now
         try:
@@ -935,8 +938,11 @@ class Prometheus:
 
     def _push_to_api(self) -> None:
         """Отправить актуальные данные в API сервис."""
-        api_url = os.environ.get("API_PUSH_URL", "")
+        api_url = (os.environ.get("API_PUSH_URL", "") or "").strip().rstrip("/")
+        if api_url.endswith("/internal/push"):
+            api_url = api_url[: -len("/internal/push")]
         if not api_url:
+            log.warning("API_PUSH_URL пустой — push в dashboard пропущен")
             return
         try:
             snap = self.risk.snapshot()
@@ -1080,15 +1086,16 @@ class Prometheus:
                 },
             }
 
-            _r.post(
+            resp = _r.post(
                 f"{api_url}/internal/push",
                 json=payload,
                 headers={"x-bot-key": cfg.dashboard_key},
                 timeout=8,
             )
+            resp.raise_for_status()
             log.info(f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f}")
         except Exception as e:
-            log.debug(f"Push to API failed: {e}")
+            log.warning(f"Push to API failed: {e}")
 
     def _maybe_daily_report(self) -> None:
         now   = datetime.now(timezone.utc)
