@@ -219,8 +219,8 @@ class Prometheus:
                 self._check_risk_alerts()
                 self._trade_cycle()
 
-                # Breaking alerts disabled: too noisy, not actionable.
-                # We keep the normal cycle only.
+                # Breaking alerts hard-disabled: too noisy and not actionable.
+                # Keep the regular cycle only.
 
                 self._sleep(cfg.scan_interval)
 

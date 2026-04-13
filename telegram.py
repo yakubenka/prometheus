@@ -34,6 +34,15 @@ class Telegram:
     def send(self, text: str, silent: bool = False) -> bool:
         if not self.enabled:
             return False
+        blocked_markers = (
+            "Wikipedia surge",
+            "🚨 Breaking",
+            "Breaking\n",
+            "Breaking\r\n",
+            "Breaking",
+        )
+        if any(marker in text for marker in blocked_markers):
+            return False
         import time as _time
         for attempt in range(3):  # 3 попытки
             try:
@@ -338,13 +347,6 @@ class Telegram:
         # Disabled on purpose: these alerts were too noisy and not actionable.
         return
 
-    def limit_warning(self, pct: float) -> None:
-        self.send(f"⚠️ Лимит потерь использован на *{pct:.0%}*")
-
-    def weights_updated(self, weights: dict) -> None:
-        lines = ["🧠 *Веса сигналов обновлены*", ""]
-        for name, w in sorted(weights.items(), key=lambda x: -x[1]):
-            bar = "▓" * int(w * 15) + "░" * (15 - int(w * 15))
             lines.append(f"`{name:<12}` {bar} {w:.0%}")
         self.send("\n".join(lines), silent=True)
 
