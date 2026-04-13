@@ -335,7 +335,8 @@ class Telegram:
         self.send(f"🎯 *Арбитраж*\n\n{title}\n_{content}_")
 
     def breaking(self, items: list[str]) -> None:
-        return
+        news = "\n".join(f"• {i[:80]}" for i in items[:3])
+        self.send(f"🚨 *Breaking*\n\n{news}")
 
     def limit_warning(self, pct: float) -> None:
         self.send(f"⚠️ Лимит потерь использован на *{pct:.0%}*")

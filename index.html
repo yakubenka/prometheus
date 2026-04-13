@@ -178,7 +178,7 @@ a{color:inherit;text-decoration:none}
   <section id="overview" class="tab-pane active">
     <div class="grid">
       <div class="panel hero">
-        <div class="kicker">Main status</div>
+        <div class="kicker">Live equity</div>
         <div class="hero-row">
           <div>
             <div class="hero-main" id="heroBankroll">$0</div>
@@ -426,22 +426,27 @@ function renderOverview() {
   const settings = state.settings || {};
   const {total} = pendingCounts(openList);
 
-  $('heroBankroll').textContent = moneyPlain(ov.bankroll || 0);
-  $('heroSubtitle').textContent = `Bankroll · ${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades`;
+  const equity = Number(ov.equity_usd ?? ((ov.cash_usd || 0) + (ov.open_exposure || 0)) || (ov.bankroll || 0));
+  const cash = Number(ov.cash_usd ?? Math.max(0, equity - Number(ov.open_exposure || 0)));
+  const bankroll = Number(ov.bankroll || 0);
+
+  $('heroBankroll').textContent = moneyPlain(equity);
+  $('heroSubtitle').textContent = `Equity · Cash ${moneyPlain(cash)} · Bankroll ${moneyPlain(bankroll)} · ${ov.bot_running ? 'bot running' : 'bot offline'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades`;
   $('metricDay').textContent = money(ov.pnl_today || 0);
   $('metricDay').className = `value ${pnlClass(ov.pnl_today)}`;
   $('metricTotal').textContent = money(ov.pnl_total || 0);
   $('metricTotal').className = `value ${pnlClass(ov.pnl_total)}`;
   $('metricOpen').textContent = String(ov.open_positions || openList.length || 0);
-  $('metricOpenSub').textContent = `Exposure ${moneyPlain(ov.open_exposure || 0)}`;
+  $('metricOpenSub').textContent = `Exposure ${moneyPlain(ov.open_exposure || 0)} · Cash ${moneyPlain(cash)}`;
   $('metricPending').textContent = String(total);
   $('metricPendingSub').textContent = total ? 'Needs Polymarket confirmation' : 'Everything confirmed';
 
   const heroBadges = [
     statusBadge(ov.bot_running ? 'Online' : 'Offline', ov.bot_running ? 'good' : 'bad'),
     statusBadge(ov.dry_run ? 'Dry run' : 'Live', ov.dry_run ? '' : 'warn'),
-    statusBadge(`Win rate ${pct(ov.win_rate || 0)}`),
+    statusBadge(`Cash ${money(cash)}`),
     statusBadge(`Unrealised ${money(ov.unrealised_pnl || 0)}`, pnlClass(ov.unrealised_pnl || 0) === 'positive' ? 'good' : pnlClass(ov.unrealised_pnl || 0) === 'negative' ? 'bad' : ''),
+    statusBadge(`Win rate ${pct(ov.win_rate || 0)}`),
   ];
   $('heroBadges').innerHTML = heroBadges.join('');
 

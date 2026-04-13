@@ -247,12 +247,17 @@ def overview():
     if d:
         d = dict(d)
         d["bot_running"] = _alive()
+        d.setdefault("bankroll", float(os.environ.get("BANKROLL","100")))
+        d.setdefault("cash_usd", d.get("bankroll", 0.0))
+        d.setdefault("equity_usd", round(float(d.get("cash_usd", 0.0)) + float(d.get("open_exposure", 0.0)), 2))
         return d
     return {
         "bot_running": _alive(), "dry_run": True,
         "pnl_today": 0, "pnl_total": 0, "unrealised_pnl": 0,
         "win_rate": 0, "total_trades": 0, "open_positions": 0,
         "open_exposure": 0, "bankroll": float(os.environ.get("BANKROLL","100")),
+        "cash_usd": float(os.environ.get("BANKROLL","100")),
+        "equity_usd": float(os.environ.get("BANKROLL","100")),
         "daily_loss_used": 0, "signals_today": 0, "smart_money_today": 0,
     }
 

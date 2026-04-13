@@ -934,6 +934,45 @@ class Prometheus:
 
         return results
 
+
+    def _fetch_live_cash_usd(self) -> float | None:
+        """Fetch live available cash from Polymarket/CLOB when possible."""
+        if cfg.dry_run or not cfg.poly_key:
+            return None
+        try:
+            from py_clob_client.client import ClobClient
+            sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
+            kwargs = {"key": cfg.poly_key, "chain_id": 137, "signature_type": sig_type}
+            if cfg.poly_funder and str(cfg.poly_funder).startswith("0x"):
+                kwargs["funder"] = cfg.poly_funder
+            client = ClobClient("https://clob.polymarket.com", **kwargs)
+            raw_creds = client.create_or_derive_api_creds()
+            if isinstance(raw_creds, dict):
+                from py_clob_client.clob_types import ApiCreds
+                raw_creds = ApiCreds(
+                    api_key=raw_creds["api_key"],
+                    api_secret=raw_creds["api_secret"],
+                    api_passphrase=raw_creds["api_passphrase"],
+                )
+            client.set_api_creds(raw_creds)
+            bal = client.get_balance()
+            candidates = []
+            if isinstance(bal, dict):
+                for key in ("balance", "available", "available_balance", "free", "usdc", "total", "amount"):
+                    value = bal.get(key)
+                    if value is not None:
+                        candidates.append(value)
+            elif isinstance(bal, (int, float, str)):
+                candidates.append(bal)
+            for raw in candidates:
+                try:
+                    return float(raw)
+                except Exception:
+                    continue
+        except Exception as e:
+            log.warning(f"Live cash fetch error: {e}")
+        return None
+
     def _push_to_api(self) -> None:
         """Отправить актуальные данные в API сервис."""
         import requests as _r
@@ -1048,6 +1087,11 @@ class Prometheus:
             # Learning stats
             learning_stats = self.learning.stats()
 
+            live_cash = self._fetch_live_cash_usd()
+            fallback_equity = float(cfg.bankroll) + float(snap["total_pnl"]) + float(total_upnl)
+            fallback_cash = max(0.0, fallback_equity - float(snap["open_exposure"]))
+            cash_usd = live_cash if live_cash is not None else fallback_cash
+            equity_usd = float(cash_usd) + float(snap["open_exposure"])
             payload = {
                 "overview": {
                     "bot_running":       True,
@@ -1060,6 +1104,8 @@ class Prometheus:
                     "open_positions":    snap["open_positions"],
                     "open_exposure":     snap["open_exposure"],
                     "bankroll":          cfg.bankroll,
+                    "cash_usd":          round(float(cash_usd), 2),
+                    "equity_usd":        round(float(equity_usd), 2),
                     "daily_loss_used":   snap["daily_loss_pct"],
                     "signals_today":     self._daily_signals,
                     "smart_money_today": self._daily_sm_alerts,
@@ -1093,7 +1139,7 @@ class Prometheus:
                 timeout=8,
             )
             resp.raise_for_status()
-            log.info(f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f}")
+            log.info(f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f} | Cash ${float(cash_usd):.2f} | Equity ${float(equity_usd):.2f}")
         except Exception as e:
             log.warning(f"Push to API failed: {e}")
 
