@@ -210,9 +210,11 @@ class Prometheus:
             try:
                 self._maybe_daily_report()
                 self._process_pending_orders()
+                self._reconcile_with_polymarket()
                 self._resolve_positions()
                 self._review_positions()
                 self._process_pending_orders()
+                self._reconcile_with_polymarket()
                 self._run_intel()
                 self._check_risk_alerts()
                 self._trade_cycle()
@@ -273,12 +275,19 @@ class Prometheus:
         signal_type: str,
         token_id: str | None,
         slug: str | None,
+        market_slug: str | None = None,
+        event_slug: str | None = None,
+        market_url: str | None = None,
+        event_url: str | None = None,
+        condition_id: str | None = None,
         notify_kwargs: dict,
     ) -> None:
         if cfg.dry_run:
             self.risk.open(
                 market_id, question, direction, entry_price, size_usd,
                 tags, signal_type, token_id=token_id, slug=slug,
+                market_slug=market_slug, event_slug=event_slug,
+                market_url=market_url, event_url=event_url, condition_id=condition_id,
             )
             self.tg.position_opened(**notify_kwargs)
             return
@@ -299,6 +308,11 @@ class Prometheus:
             signal_type=signal_type,
             token_id=token_id,
             slug=slug,
+            market_slug=market_slug,
+            event_slug=event_slug,
+            market_url=market_url,
+            event_url=event_url,
+            condition_id=condition_id,
             max_attempts=cfg.max_order_retries,
             interval_sec=cfg.open_verify_interval_sec,
         )
@@ -323,6 +337,9 @@ class Prometheus:
                     action.market_id, action.question, action.direction,
                     action.entry_price, action.size_usd, action.tags,
                     action.signal_type, token_id=action.token_id, slug=action.slug,
+                    market_slug=action.market_slug, event_slug=action.event_slug,
+                    market_url=action.market_url, event_url=action.event_url,
+                    condition_id=action.condition_id,
                 )
                 notify_kwargs = self._pending_open_notifies.pop(action.market_id, None)
                 if notify_kwargs:
@@ -351,6 +368,35 @@ class Prometheus:
                 self._push_to_api()
         except Exception as e:
             log.warning(f"Pending close retry error: {e}")
+
+
+    def _reconcile_with_polymarket(self) -> None:
+        if cfg.dry_run or not cfg.poly_funder:
+            return
+        now = time.time()
+        if (now - self._last_reconcile) < cfg.reconcile_interval_sec:
+            return
+        self._last_reconcile = now
+        try:
+            real_positions = fetch_polymarket_positions(cfg.poly_funder)
+            result = self.risk.reconcile_open_positions(real_positions)
+            for item in result.get("externally_closed", []):
+                log.warning(f"🔄 External/manual close detected on Polymarket: {item.get('question','')[:80]}")
+                try:
+                    self.tg.send(
+                        f"⚠️ *External close detected*\n\n"
+                        f"{item.get('question','position')}\n"
+                        f"Source of truth: *Polymarket*\n"
+                        f"Reason: `{item.get('reason','external_manual_close')}`"
+                    )
+                except Exception:
+                    pass
+            if result.get("discovered"):
+                log.warning(f"🔎 Found {len(result['discovered'])} Polymarket positions missing in local state")
+            if result.get("externally_closed") or result.get("discovered"):
+                self._push_to_api()
+        except Exception as e:
+            log.warning(f"Reconciliation error: {e}")
 
     def _resolve_positions(self) -> None:
         closed = self.resolver.run()
@@ -748,6 +794,11 @@ class Prometheus:
                     signal_type=result.strategy_type,
                     token_id=token,
                     slug=market.slug,
+                    market_slug=getattr(market, "market_slug", None),
+                    event_slug=getattr(market, "event_slug", None),
+                    market_url=getattr(market, "market_url", None),
+                    event_url=getattr(market, "event_url", None),
+                    condition_id=getattr(market, "condition_id", None) or market.id,
                     notify_kwargs={
                         "question": market.question,
                         "direction": result.direction,
@@ -859,6 +910,11 @@ class Prometheus:
                     signal_type="near_resolution",
                     token_id=token,
                     slug=market.slug,
+                    market_slug=getattr(market, "market_slug", None),
+                    event_slug=getattr(market, "event_slug", None),
+                    market_url=getattr(market, "market_url", None),
+                    event_url=getattr(market, "event_url", None),
+                    condition_id=getattr(market, "condition_id", None) or market.id,
                     notify_kwargs={
                         "question": market.question,
                         "direction": direction,
@@ -882,75 +938,85 @@ class Prometheus:
         if not api_url:
             return
         try:
-            import requests as _r
-            snap     = self.risk.snapshot()
-            open_pos = self.risk.open_positions
-            # Все закрытые — для полной истории
-            all_closed = self.risk.closed_positions
-            closed_today = [p for p in all_closed
-                           if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()]
+            snap = self.risk.snapshot()
 
-            def get_current_price(token_id: str) -> float:
-                """Текущая цена токена с Polymarket CLOB."""
-                if not token_id:
-                    return 0.0
+            # Перед каждым push сверяем open-позиции с Polymarket.
+            real_positions: dict[str, dict] = {}
+            if not cfg.dry_run and cfg.poly_funder:
                 try:
-                    r = _r.get(
-                        "https://clob.polymarket.com/midpoint",
-                        params={"token_id": token_id},
-                        timeout=4,
-                    )
-                    if r.status_code == 200:
-                        return float(r.json().get("mid", 0))
-                except Exception:
-                    pass
-                return 0.0
+                    real_positions = fetch_polymarket_positions(cfg.poly_funder)
+                    rec = self.risk.reconcile_open_positions(real_positions)
+                    if rec.get("externally_closed"):
+                        log.info(f"Reconcile before push: {len(rec['externally_closed'])} external/manual close(s)")
+                except Exception as e:
+                    log.warning(f"Push reconcile error: {e}")
+
+            open_pos = self.risk.open_positions
+            all_closed = self.risk.closed_positions
+            closed_today = [
+                p for p in all_closed
+                if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()
+            ]
 
             def calc_upnl(p, current_price: float) -> float:
                 """Unrealised P&L по текущей цене."""
                 if current_price <= 0 or p.entry_price <= 0:
                     return 0.0
                 entry = p.entry_price if p.direction == "YES" else 1 - p.entry_price
-                cur   = current_price if p.direction == "YES" else 1 - current_price
+                cur = current_price if p.direction == "YES" else 1 - current_price
                 return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
 
             def polymarket_url(p) -> str:
-                """Прямая ссылка на рынок Polymarket."""
-                import urllib.parse
-                slug = getattr(p, 'slug', None)
-                if slug:
-                    return f"https://polymarket.com/event/{slug}"
-                # Fallback: поиск
-                words = ' '.join((p.question or '').split()[:6])
-                q = urllib.parse.quote(words)
-                return f"https://polymarket.com/markets?_s={q}"
+                return best_polymarket_url(
+                    question=p.question or "",
+                    market_url=getattr(p, "market_url", None),
+                    event_url=getattr(p, "event_url", None),
+                    market_slug=getattr(p, "market_slug", None),
+                    event_slug=getattr(p, "event_slug", None),
+                    slug=getattr(p, "slug", None),
+                )
+
+            def current_price_for(p) -> float:
+                if not p.token_id:
+                    return 0.0
+                real = real_positions.get(p.token_id)
+                if real:
+                    return float(real.get("cur_price", 0) or 0.0)
+                return 0.0
 
             def fmt(p, fetch_price: bool = False):
-                current_price = get_current_price(p.token_id) if fetch_price and p.token_id else 0.0
+                current_price = current_price_for(p) if fetch_price else 0.0
                 upnl = calc_upnl(p, current_price) if fetch_price else (p.pnl or 0)
                 return {
-                    "id":           p.market_id,
-                    "question":     p.question,
-                    "direction":    p.direction,
-                    "price":        p.entry_price,
+                    "id":            p.market_id,
+                    "question":      p.question,
+                    "direction":     p.direction,
+                    "price":         p.entry_price,
                     "current_price": current_price,
-                    "size":         p.size_usd,
-                    "pnl":          upnl,
-                    "age":          "now",
-                    "tags":         p.tags,
-                    "status":       p.status,
-                    "type":         p.signal_type,
-                    "url":          polymarket_url(p),
-                    "slug":         getattr(p, "slug", "") or "",
-                    "token_id":     p.token_id or "",
+                    "size":          p.size_usd,
+                    "pnl":           upnl,
+                    "age":           "now",
+                    "tags":          p.tags,
+                    "status":        p.status,
+                    "type":          p.signal_type,
+                    "url":           polymarket_url(p),
+                    "slug":          getattr(p, "slug", "") or "",
+                    "market_slug":   getattr(p, "market_slug", "") or "",
+                    "event_slug":    getattr(p, "event_slug", "") or "",
+                    "market_url":    getattr(p, "market_url", "") or "",
+                    "event_url":     getattr(p, "event_url", "") or "",
+                    "condition_id":  getattr(p, "condition_id", "") or "",
+                    "token_id":      p.token_id or "",
+                    "last_verified_at": getattr(p, "last_verified_at", "") or "",
+                    "reconcile_state": getattr(p, "reconcile_state", "") or "",
+                    "closed_reason": getattr(p, "closed_reason", "") or "",
+                    "polymarket_size": float(real_positions.get(p.token_id, {}).get("size", 0) or 0) if fetch_price and p.token_id else 0.0,
                 }
 
-            # Считаем unrealised P&L для открытых позиций
-            open_formatted   = [fmt(p, fetch_price=True)  for p in open_pos]
+            open_formatted = [fmt(p, fetch_price=True) for p in open_pos]
             closed_formatted = [fmt(p, fetch_price=False) for p in closed_today]
-            all_closed_fmt   = [fmt(p, fetch_price=False) for p in all_closed[-100:]]
+            all_closed_fmt = [fmt(p, fetch_price=False) for p in all_closed[-100:]]
 
-            # Суммарный unrealised P&L
             total_upnl = sum(p["pnl"] for p in open_formatted)
 
             # Smart money leaderboard

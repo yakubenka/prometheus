@@ -267,7 +267,14 @@ def signals(limit: int = 30):
 
 @app.get("/api/positions")
 def positions():
-    return store_get("positions") or {"open": [], "closed_today": [], "history": []}
+    data = store_get("positions") or {"open": [], "closed_today": [], "history": []}
+    if "closed_today" not in data:
+        data["closed_today"] = []
+    if "history" not in data:
+        data["history"] = []
+    if "open" not in data:
+        data["open"] = []
+    return data
 
 @app.post("/api/close_position")
 async def close_position(request: Request, _=Depends(_manual_close_auth)):
@@ -409,6 +416,7 @@ def settings():
         },
         "engine": {
             "scan_interval_sec": int(os.environ.get("SCAN_INTERVAL_SEC", "60") or 60),
+            "reconcile_interval_sec": int(os.environ.get("RECONCILE_INTERVAL_SEC", "180") or 180),
             "ai_mode": os.environ.get("AI_MODE", "minimal"),
             "min_trade_quality": int(os.environ.get("MIN_TRADE_QUALITY", "60") or 60),
             "enable_near_resolution": str(os.environ.get("ENABLE_NEAR_RESOLUTION", "false")).lower() == "true",

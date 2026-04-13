@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import requests
 
-from data import fetch_current_price
+from data import fetch_current_price, best_polymarket_url
 from risk import Position
 
 
@@ -354,13 +354,14 @@ class PositionResolver:
         if not self.tg:
             return
         try:
-            import urllib.parse as _up
-            slug = getattr(pos, 'slug', None)
-            if slug:
-                pm_url = f"https://polymarket.com/event/{slug}"
-            else:
-                q      = _up.quote((pos.question or '')[:100])
-                pm_url = f"https://polymarket.com/?s={q}"
+            pm_url = best_polymarket_url(
+                question=pos.question or "",
+                market_url=getattr(pos, "market_url", None),
+                event_url=getattr(pos, "event_url", None),
+                market_slug=getattr(pos, "market_slug", None),
+                event_slug=getattr(pos, "event_slug", None),
+                slug=getattr(pos, "slug", None),
+            )
 
             if hasattr(self.tg, "position_closed"):
                 self.tg.position_closed(

@@ -62,10 +62,32 @@ a{color:inherit;text-decoration:none}
 .badge.bad{color:var(--bad)}
 .badge.warn{color:var(--warn)}
 .list{display:flex;flex-direction:column;gap:12px}
-.item{padding:16px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
+.item{padding:14px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
 .item-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-.title{font-size:16px;line-height:1.35;font-weight:590}
-.meta{margin-top:8px;font-size:13px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.title{font-size:15px;line-height:1.32;font-weight:590}
+.meta{margin-top:6px;font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
+.position-card{padding:14px}
+.position-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.position-main{min-width:0;flex:1}
+.position-side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:110px}
+.position-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.position-chip{padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px;color:var(--soft);white-space:nowrap}
+.position-chip.ok{color:var(--good)}
+.position-chip.warn{color:var(--warn)}
+.position-chip.bad{color:var(--bad)}
+.compact-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}
+.compact-stat{padding:0}
+.compact-stat .sl{color:var(--muted);font-size:11px;margin-bottom:2px}
+.compact-stat .sv{font-size:14px;letter-spacing:-.02em;font-weight:620}
+.inline-actions{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.details-wrap{margin-top:8px}
+.details-wrap details{border-top:1px solid rgba(255,255,255,.06);padding-top:8px}
+.details-wrap summary{list-style:none;cursor:pointer;color:var(--muted);font-size:12px}
+.details-wrap summary::-webkit-details-marker{display:none}
+.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+.detail-box{padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.04)}
+.detail-box .sl{font-size:11px;color:var(--muted);margin-bottom:4px}
+.detail-box .sv{font-size:13px;line-height:1.25}
 .pill{padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--soft);white-space:nowrap}
 .value-lg{font-size:24px;font-weight:650;letter-spacing:-.04em}
 .value-sm{font-size:14px;color:var(--muted)}
@@ -119,10 +141,13 @@ a{color:inherit;text-decoration:none}
 }
 @media (max-width:640px){
   .hero-row{flex-direction:column}
-  .hero-meta,.settings-grid,.kv,.row2{grid-template-columns:1fr}
+  .hero-meta,.settings-grid,.kv,.row2,.compact-grid,.detail-grid{grid-template-columns:1fr}
   .section{padding:18px}
   .hero{padding:22px 18px}
   .value-lg{font-size:20px}
+  .position-card{padding:12px}
+  .position-side{min-width:86px}
+  .btn{padding:9px 12px}
 }
 </style>
 </head>
@@ -348,6 +373,23 @@ function pendingCounts(openList) {
   const pendingClose = openList.filter((p) => String(p.status || '').includes('closing')).length;
   return {pendingOpen, pendingClose, total: pendingOpen + pendingClose};
 }
+function reconcileTone(state) {
+  const value = String(state || '').toLowerCase();
+  if (value.includes('verified')) return 'ok';
+  if (value.includes('external') || value.includes('mismatch')) return 'bad';
+  if (value.includes('pending') || value.includes('unverified')) return 'warn';
+  return '';
+}
+function shortToken(token) {
+  const t = String(token || '');
+  if (!t) return '—';
+  return t.length > 12 ? `${t.slice(0,6)}…${t.slice(-4)}` : t;
+}
+function verifiedText(p) {
+  if (p.last_verified_at) return 'Verified';
+  if (p.reconcile_state) return formatType(p.reconcile_state);
+  return 'Not verified';
+}
 function buildAlerts() {
   const alerts = [];
   const ov = state.overview || {};
@@ -385,7 +427,7 @@ function renderOverview() {
   const {total} = pendingCounts(openList);
 
   $('heroBankroll').textContent = moneyPlain(ov.bankroll || 0);
-  $('heroSubtitle').textContent = `${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades`;
+  $('heroSubtitle').textContent = `Bankroll · ${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades`;
   $('metricDay').textContent = money(ov.pnl_today || 0);
   $('metricDay').className = `value ${pnlClass(ov.pnl_today)}`;
   $('metricTotal').textContent = money(ov.pnl_total || 0);
@@ -456,45 +498,57 @@ function renderPositions() {
   const closedToday = state.positions.closed_today || [];
 
   $('openPositions').innerHTML = openList.length ? openList.map((p) => `
-    <div class="item">
-      <div class="item-top">
-        <div>
+    <div class="item position-card">
+      <div class="position-head">
+        <div class="position-main">
           <div class="title">${esc(p.question || 'Untitled market')}</div>
-          <div class="meta">
-            <span>${esc(p.direction || '—')}</span>
-            <span>${esc(formatType(p.type || 'unknown'))}</span>
-            <span>Status: ${esc(p.status || 'open')}</span>
+          <div class="position-chips">
+            <span class="position-chip">${esc(p.direction || '—')}</span>
+            <span class="position-chip">${esc(formatType(p.type || 'unknown'))}</span>
+            <span class="position-chip ${reconcileTone(p.reconcile_state)}">${esc(verifiedText(p))}</span>
           </div>
         </div>
-        <div style="text-align:right">
+        <div class="position-side">
           <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
           <div class="value-sm">Size ${moneyPlain(p.size || 0)}</div>
         </div>
       </div>
-      <div class="row2">
-        <div class="stat"><div class="sl">Entry</div><div class="sv">${pct(p.price || 0)}</div></div>
-        <div class="stat"><div class="sl">Current</div><div class="sv">${pct(p.current_price || 0)}</div></div>
-        <div class="stat"><div class="sl">Age</div><div class="sv">${esc(p.age || 'now')}</div></div>
-        <div class="stat"><div class="sl">Token</div><div class="sv">${esc((p.token_id || '').slice(0, 10) || '—')}</div></div>
+      <div class="compact-grid">
+        <div class="compact-stat"><div class="sl">Entry</div><div class="sv">${pct(p.price || 0)}</div></div>
+        <div class="compact-stat"><div class="sl">Current</div><div class="sv">${pct(p.current_price || 0)}</div></div>
+        <div class="compact-stat"><div class="sl">Exposure</div><div class="sv">${moneyPlain(p.size || 0)}</div></div>
+        <div class="compact-stat"><div class="sl">Token</div><div class="sv">${esc(shortToken(p.token_id))}</div></div>
       </div>
-      <div class="cta" style="margin-top:16px">
-        <button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\\'"))}')">Close</button>
-        ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Open on Polymarket</a>` : ''}
+      <div class="inline-actions">
+        <button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\'"))}')">Close</button>
+        ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Open on Polymarket</a>` : `<button class="btn secondary" disabled>Link unavailable</button>`}
+      </div>
+      <div class="details-wrap">
+        <details>
+          <summary>Details</summary>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="sl">Status</div><div class="sv">${esc(p.status || 'open')}</div></div>
+            <div class="detail-box"><div class="sl">Verification</div><div class="sv">${esc(p.last_verified_at || 'Waiting for fresh Polymarket check')}</div></div>
+            <div class="detail-box"><div class="sl">Condition</div><div class="sv">${esc(shortToken(p.condition_id || ''))}</div></div>
+            <div class="detail-box"><div class="sl">Link source</div><div class="sv">${esc(p.market_url ? 'market_url' : p.event_url ? 'event_url' : p.url ? 'search fallback' : 'missing')}</div></div>
+          </div>
+        </details>
       </div>
     </div>
   `).join('') : `<div class="empty">No open positions.</div>`;
 
   $('closedToday').innerHTML = closedToday.length ? closedToday.map((p) => `
-    <div class="item">
-      <div class="item-top">
-        <div>
+    <div class="item position-card">
+      <div class="position-head">
+        <div class="position-main">
           <div class="title">${esc(p.question || 'Untitled market')}</div>
-          <div class="meta">
-            <span>${esc(p.direction || '—')}</span>
-            <span>${esc(formatType(p.type || 'unknown'))}</span>
+          <div class="position-chips">
+            <span class="position-chip">${esc(p.direction || '—')}</span>
+            <span class="position-chip">${esc(formatType(p.type || 'unknown'))}</span>
+            ${p.closed_reason ? `<span class="position-chip ${reconcileTone(p.closed_reason)}">${esc(formatType(p.closed_reason))}</span>` : ''}
           </div>
         </div>
-        <div style="text-align:right">
+        <div class="position-side">
           <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
           <div class="value-sm">Size ${moneyPlain(p.size || 0)}</div>
         </div>
@@ -502,6 +556,7 @@ function renderPositions() {
     </div>
   `).join('') : `<div class="empty">Nothing closed today yet.</div>`;
 }
+
 
 function renderStrategies() {
   const strategies = state.strategies.strategies || {};
@@ -538,7 +593,7 @@ function renderStrategies() {
 
 function renderHistory() {
   const rows = (state.positions.history || []).slice().reverse().slice(0, 100);
-  $('historyRows').innerHTML = rows.length ? rows.map((p) => `
+  const desktop = rows.length ? rows.map((p) => `
     <tr>
       <td>${esc((p.question || '').slice(0, 90) || 'Untitled market')}</td>
       <td class="muted">${esc(formatType(p.type || 'unknown'))}</td>
@@ -547,6 +602,7 @@ function renderHistory() {
       <td class="${pnlClass(p.pnl)}">${money(p.pnl || 0)}</td>
     </tr>
   `).join('') : `<tr><td colspan="5" class="empty">No history yet.</td></tr>`;
+  $('historyRows').innerHTML = desktop;
 }
 
 function renderSettings() {

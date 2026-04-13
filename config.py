@@ -65,6 +65,7 @@ class Config:
 
     open_verify_interval_sec: int = _i("OPEN_VERIFY_INTERVAL_SEC", 60)
     close_retry_interval_sec: int = _i("CLOSE_RETRY_INTERVAL_SEC", 1800)
+    reconcile_interval_sec: int = _i("RECONCILE_INTERVAL_SEC", 180)
     max_order_retries: int = _i("MAX_ORDER_RETRIES", 10)
     ai_unconfirmed_edge: float = _f("AI_UNCONFIRMED_EDGE", 0.10)
 
@@ -119,6 +120,7 @@ class Config:
             f"Scan interval: {self.scan_interval}s",
             f"Open verify:   {self.open_verify_interval_sec}s",
             f"Close retry:   {self.close_retry_interval_sec}s x {self.max_order_retries}",
+            f"Reconcile:     {self.reconcile_interval_sec}s",
             f"Logs dir:      {self.logs_dir}",
         ]
         return "\n".join(lines)

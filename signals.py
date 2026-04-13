@@ -204,14 +204,27 @@ class SignalEngine:
         result.ai_used = ai_signal is not None
         result.ai_calls_used = 1 if ai_signal is not None else 0
 
-        if result.trade_quality < cfg.min_trade_quality:
+        tradeability = self._tradeability_score(market, signals, pre_score)
+        min_edge = max(get_domain_min_edge(list(market.tags), cfg.min_edge), cfg.min_edge)
+        external_support = self._external_support_count(result.direction, signals)
+        market_data_support = self._market_data_support_count(result.direction, signals)
+
+        if tradeability < 45:
+            result.direction = "NEUTRAL"
+            result.confidence = "low"
+            result.reasoning = f"tradeability={tradeability} too low"
+        elif result.trade_quality < cfg.min_trade_quality:
             result.direction = "NEUTRAL"
             result.confidence = "low"
             result.reasoning = f"quality={result.trade_quality} below threshold"
-        elif result.strategy_type == "ai_assisted" and result.edge < max(cfg.ai_unconfirmed_edge, get_domain_min_edge(list(market.tags), cfg.min_edge)):
+        elif result.strategy_type == "ai_assisted" and result.edge < max(cfg.ai_unconfirmed_edge, min_edge):
             result.direction = "NEUTRAL"
             result.confidence = "low"
             result.reasoning = "AI-assisted setup without enough edge"
+        elif result.direction != "NEUTRAL" and external_support == 0 and market_data_support < 2 and result.edge < (min_edge * 1.5):
+            result.direction = "NEUTRAL"
+            result.confidence = "low"
+            result.reasoning = "Not enough non-AI confirmation"
 
         return result
 
@@ -317,37 +330,63 @@ class SignalEngine:
             return False
         if cfg.ai_mode == "full":
             return True
-        if quality < cfg.ai_min_quality_for_call:
+        if quality < max(cfg.ai_min_quality_for_call, 58):
             return False
         if quality >= cfg.ai_high_quality_skip and self._external_support_count(result.direction, signals) >= 1:
             return False
-        return result.direction != "NEUTRAL" or quality >= cfg.ai_min_quality_for_call + 10
+        if result.direction == "NEUTRAL":
+            return quality >= cfg.ai_min_quality_for_call + 12
+        return self._external_support_count(result.direction, signals) == 0 and quality >= cfg.ai_min_quality_for_call + 8
+
+    def _tradeability_score(self, market: Market, signals: list[Signal], pre_score: float) -> int:
+        score = 0.0
+        if market.volume_24h >= cfg.min_volume * 2:
+            score += 28.0
+        elif market.volume_24h >= cfg.min_volume:
+            score += 20.0
+        elif market.volume_24h >= cfg.min_volume * 0.5:
+            score += 8.0
+        else:
+            score -= 28.0
+        if hasattr(market, "spread") and market.spread <= 0.02:
+            score += 18.0
+        elif hasattr(market, "spread") and market.spread <= 0.04:
+            score += 10.0
+        else:
+            score -= 8.0
+        if market.description and len(market.description) >= 60:
+            score += 8.0
+        else:
+            score -= 4.0
+        if getattr(market, "market_url", None) or getattr(market, "event_url", None):
+            score += 6.0
+        else:
+            score -= 4.0
+        if 0.03 <= market.yes_price <= 0.97:
+            score += 8.0
+        if 0.08 <= market.yes_price <= 0.92:
+            score += 6.0
+        score += min(12.0, max(0.0, pre_score) * 10.0)
+        vol = next((s for s in signals if s.name == "volume_spike" and s.confidence >= 0.45), None)
+        if vol:
+            score += 4.0
+        return int(max(0, min(100, round(score))))
 
     def _trade_quality(self, market: Market, result: EnsembleResult, signals: list[Signal], pre_score: float) -> int:
-        score = 0.0
+        score = self._tradeability_score(market, signals, pre_score) * 0.45
         score += min(30.0, result.edge * 180.0)
-        score += min(12.0, max(0.0, pre_score) * 12.0)
-        if market.volume_24h >= cfg.min_volume * 2:
-            score += 12.0
-        elif market.volume_24h >= cfg.min_volume:
-            score += 8.0
-        elif market.volume_24h >= cfg.min_volume * 0.5:
-            score += 3.0
-        else:
-            score -= 20.0
-
-        if 0.02 <= market.yes_price <= 0.98:
-            score += 6.0
-        if 0.05 <= market.yes_price <= 0.95:
-            score += 4.0
-        if hasattr(market, "spread") and market.spread <= 0.03:
-            score += 6.0
+        score += min(8.0, max(0.0, pre_score) * 8.0)
 
         ext_support = self._external_support_count(result.direction, signals)
+        market_data_support = self._market_data_support_count(result.direction, signals)
         if ext_support >= 2:
             score += 22.0
         elif ext_support == 1:
             score += 12.0
+        if market_data_support >= 2:
+            score += 10.0
+        elif market_data_support == 1:
+            score += 4.0
 
         momentum = next((s for s in signals if s.name == "momentum" and s.direction == result.direction), None)
         if momentum:
@@ -359,6 +398,14 @@ class SignalEngine:
 
         if result.direction == "NEUTRAL":
             score -= 20.0
+        if result.direction != "NEUTRAL" and self._external_support_count(result.direction, signals) == 0:
+            score -= 10.0
+        if result.direction != "NEUTRAL" and self._market_data_support_count(result.direction, signals) == 0:
+            score -= 8.0
+        if result.confidence == "low":
+            score -= 6.0
+        if result.edge < max(cfg.min_edge, get_domain_min_edge(list(market.tags), cfg.min_edge)):
+            score -= 6.0
 
         return int(max(0, min(100, round(score))))
 
@@ -368,6 +415,14 @@ class SignalEngine:
         return sum(
             1 for s in signals
             if s.name in {"consensus", "predictit"} and s.direction == direction and s.confidence >= 0.35
+        )
+
+    def _market_data_support_count(self, direction: str, signals: list[Signal]) -> int:
+        if direction == "NEUTRAL":
+            return 0
+        return sum(
+            1 for s in signals
+            if s.name in _NON_AI_SIGNAL_NAMES and s.direction == direction and s.confidence >= 0.35
         )
 
     def _strategy_type(self, direction: str, signals: list[Signal], ai_used: bool) -> str:

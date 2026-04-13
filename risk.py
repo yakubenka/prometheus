@@ -43,6 +43,14 @@ class Position:
     signal_type:  str = "ai"
     token_id:     Optional[str] = None
     slug:         Optional[str] = None
+    market_slug:  Optional[str] = None
+    event_slug:   Optional[str] = None
+    market_url:   Optional[str] = None
+    event_url:    Optional[str] = None
+    condition_id: Optional[str] = None
+    last_verified_at: Optional[str] = None
+    reconcile_state: str = "unverified"
+    closed_reason: Optional[str] = None
 
 
 @dataclass
@@ -54,7 +62,6 @@ class PendingAction:
     size_usd:      float
     token_id:      Optional[str]
     slug:          Optional[str]
-    signal_type:   str
     entry_price:   float
     attempts:      int
     max_attempts:  int
@@ -62,6 +69,12 @@ class PendingAction:
     next_retry_at: float
     created_at:    str
     tags:          list
+    market_slug:   Optional[str] = None
+    event_slug:    Optional[str] = None
+    market_url:    Optional[str] = None
+    event_url:     Optional[str] = None
+    condition_id:  Optional[str] = None
+    signal_type:   str = "ai"
     reason:        str = ""
     target_price:  Optional[float] = None
     last_error:    str = ""
@@ -173,6 +186,11 @@ class RiskManager:
         signal_type: str  = "ai",
         token_id:    str  = None,
         slug:        str  = None,
+        market_slug: str  = None,
+        event_slug:  str  = None,
+        market_url:  str  = None,
+        event_url:   str  = None,
+        condition_id:str  = None,
     ) -> Position:
         pos = Position(
             market_id   = market_id,
@@ -185,6 +203,13 @@ class RiskManager:
             signal_type = signal_type,
             token_id    = token_id,
             slug        = slug,
+            market_slug = market_slug,
+            event_slug  = event_slug,
+            market_url  = market_url,
+            event_url   = event_url,
+            condition_id= condition_id or market_id,
+            last_verified_at = datetime.now(timezone.utc).isoformat() if not os.environ.get("DRY_RUN", "true").lower() in ("1","true","yes","on") else None,
+            reconcile_state = "open_verified" if not os.environ.get("DRY_RUN", "true").lower() in ("1","true","yes","on") else "paper_open",
         )
         self._positions.append(pos)
         self._save()
@@ -231,7 +256,12 @@ class RiskManager:
         signal_type: str,
         token_id: str | None,
         slug: str | None,
-        max_attempts: int,
+        market_slug: str | None = None,
+        event_slug: str | None = None,
+        market_url: str | None = None,
+        event_url: str | None = None,
+        condition_id: str | None = None,
+        max_attempts: int = 10,
         interval_sec: int,
     ) -> PendingAction:
         existing = next((a for a in self._pending_actions if a.market_id == market_id and a.action_type == "open_verify"), None)
@@ -246,6 +276,11 @@ class RiskManager:
             token_id=token_id,
             slug=slug,
             signal_type=signal_type,
+            market_slug=market_slug,
+            event_slug=event_slug,
+            market_url=market_url,
+            event_url=event_url,
+            condition_id=condition_id or market_id,
             entry_price=entry_price,
             attempts=0,
             max_attempts=max_attempts,
@@ -285,6 +320,11 @@ class RiskManager:
             token_id=pos.token_id,
             slug=pos.slug,
             signal_type=pos.signal_type,
+            market_slug=pos.market_slug,
+            event_slug=pos.event_slug,
+            market_url=pos.market_url,
+            event_url=pos.event_url,
+            condition_id=pos.condition_id or pos.market_id,
             entry_price=pos.entry_price,
             attempts=0,
             max_attempts=max_attempts,
@@ -339,6 +379,14 @@ class RiskManager:
                     signal_type=item.get("type", "ai"),
                     token_id=item.get("token_id"),
                     slug=item.get("slug"),
+                    market_slug=item.get("market_slug"),
+                    event_slug=item.get("event_slug"),
+                    market_url=item.get("market_url") or item.get("url"),
+                    event_url=item.get("event_url"),
+                    condition_id=item.get("condition_id") or mid,
+                    last_verified_at=item.get("last_verified_at"),
+                    reconcile_state=item.get("reconcile_state", "closed_verified"),
+                    closed_reason=item.get("closed_reason"),
                 )
                 self._positions.append(pos)
                 existing_ids.add(mid)
@@ -378,6 +426,58 @@ class RiskManager:
     @property
     def is_paused(self) -> bool:
         return self._paused
+
+    def reconcile_open_positions(self, real_positions: dict[str, dict]) -> dict:
+        """
+        Сверить локальные open-позиции с Polymarket.
+        Источник правды — Polymarket.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        externally_closed: list[dict] = []
+        discovered: list[dict] = []
+
+        pending_close_ids = {a.market_id for a in self.pending_close_actions}
+        local_by_token = {p.token_id: p for p in self.open_positions if p.token_id}
+
+        for pos in self.open_positions:
+            if not pos.token_id:
+                continue
+            real = real_positions.get(pos.token_id)
+            if real and float(real.get("size", 0) or 0) > 0.0001:
+                pos.last_verified_at = now_iso
+                pos.reconcile_state = "open_verified"
+                continue
+            if pos.market_id in pending_close_ids:
+                continue
+
+            pos.status = "closed"
+            pos.closed_at = now_iso
+            pos.closed_reason = "external_manual_close"
+            pos.reconcile_state = "externally_closed"
+            pos.last_verified_at = now_iso
+            if pos.pnl is None:
+                pos.pnl = 0.0
+            externally_closed.append({
+                "market_id": pos.market_id,
+                "question": pos.question,
+                "token_id": pos.token_id,
+                "reason": pos.closed_reason,
+            })
+
+        for token_id, real in real_positions.items():
+            if token_id in local_by_token:
+                continue
+            discovered.append({
+                "token_id": token_id,
+                "market_id": real.get("market_id", ""),
+                "size": float(real.get("size", 0) or 0),
+                "avg_price": float(real.get("avg_price", 0) or 0),
+                "cur_price": float(real.get("cur_price", 0) or 0),
+            })
+
+        if externally_closed or discovered:
+            self._save()
+        return {"externally_closed": externally_closed, "discovered": discovered}
 
     def snapshot(self) -> dict:
         daily = self._daily_pnl()

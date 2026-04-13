@@ -38,6 +38,39 @@ def _build_session() -> requests.Session:
 
 SESSION = _build_session()
 
+def normalize_polymarket_url(url: str | None) -> str | None:
+    """Нормализовать URL Polymarket и отбросить заведомо битые ссылки."""
+    if not url:
+        return None
+    url = str(url).strip()
+    if not url:
+        return None
+    if url.startswith("/"):
+        return f"https://polymarket.com{url}"
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return None
+
+
+def build_polymarket_search_url(question: str) -> str:
+    import urllib.parse
+    q = urllib.parse.quote((question or "")[:100])
+    return f"https://polymarket.com/?s={q}"
+
+
+def best_polymarket_url(*, question: str, market_url: str | None = None, event_url: str | None = None,
+                        market_slug: str | None = None, event_slug: str | None = None, slug: str | None = None) -> str:
+    """Лучший доступный URL рынка. Не строим сомнительные event/market ссылки на глаз."""
+    for candidate in (
+        normalize_polymarket_url(market_url),
+        normalize_polymarket_url(event_url),
+    ):
+        if candidate:
+            return candidate
+    # Старые данные без реального URL открываем через поиск, а не на битую страницу.
+    return build_polymarket_search_url(question)
+
+
 
 # ── Data Models ───────────────────────────────────────────────────────────────
 
@@ -54,7 +87,12 @@ class Market:
     token_id_no:  Optional[str]
     description:  str
     tags:         tuple          # immutable
-    slug:         Optional[str] = None   # для прямых ссылок на Polymarket
+    slug:         Optional[str] = None   # legacy alias
+    condition_id: Optional[str] = None
+    market_slug:  Optional[str] = None
+    event_slug:   Optional[str] = None
+    market_url:   Optional[str] = None
+    event_url:    Optional[str] = None
 
     @property
     def spread(self) -> float:
@@ -62,25 +100,15 @@ class Market:
 
     @property
     def polymarket_url(self) -> str:
-        """
-        Ссылка на рынок Polymarket.
-
-        Polymarket URL структура:
-        - /event/{eventSlug}  — страница события. НО: Gamma API возвращает
-          marketSlug который отличается от eventSlug → часто 404.
-        - /?s={query}         — поиск. НИКОГДА не даёт 404, всегда находит рынок.
-
-        Используем поиск по полному названию вопроса — это надёжнее.
-        Если slug есть — пробуем /event/ первым, но это не гарантия.
-        """
-        import urllib.parse
-        # Поиск по полному вопросу — никогда не 404
-        q = urllib.parse.quote(self.question[:100])
-        search_url = f"https://polymarket.com/?s={q}"
-        # Если есть slug — используем /event/ (может дать 404, но чаще работает)
-        if self.slug:
-            return f"https://polymarket.com/event/{self.slug}"
-        return search_url
+        """Лучший доступный URL рынка/события на Polymarket."""
+        return best_polymarket_url(
+            question=self.question,
+            market_url=self.market_url,
+            event_url=self.event_url,
+            market_slug=self.market_slug,
+            event_slug=self.event_slug,
+            slug=self.slug,
+        )
 
     @staticmethod
     def _make_slug(question: str) -> str:
@@ -284,19 +312,31 @@ def _parse_market(m: dict) -> Optional[Market]:
         text = (m.get("question") or "") + " " + (m.get("description") or "")
         tags = _extract_tags(text.lower())
 
-        # Собираем все возможные slug поля из Gamma API
-        # groupSlug — slug родительского события (наиболее точный для /event/)
-        # marketSlug — slug самого рынка
-        # slug — общее поле
-        slug = (
+        event_slug = (
             m.get("groupSlug") or
+            m.get("eventSlug") or
+            None
+        )
+        market_slug = (
             m.get("marketSlug") or
             m.get("slug") or
             None
         )
+        slug = event_slug or market_slug
+
+        market_url = (
+            m.get("url") or
+            m.get("marketUrl") or
+            None
+        )
+        event_url = (
+            m.get("eventUrl") or
+            None
+        )
+        condition_id = str(m.get("conditionId") or m.get("id") or "")
 
         return Market(
-            id           = str(m.get("id") or m.get("conditionId") or ""),
+            id           = condition_id,
             question     = str(m.get("question") or m.get("title") or ""),
             yes_price    = yes_price,
             no_price     = no_price,
@@ -307,6 +347,11 @@ def _parse_market(m: dict) -> Optional[Market]:
             description  = str(m.get("description") or "")[:500],
             tags         = tags,
             slug         = slug,
+            condition_id = condition_id,
+            market_slug  = market_slug,
+            event_slug   = event_slug,
+            market_url   = market_url,
+            event_url    = event_url,
         )
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
         log.debug(f"Ошибка парсинга рынка: {e}")
