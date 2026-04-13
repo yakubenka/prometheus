@@ -21,7 +21,7 @@ from dataclasses import dataclass, asdict
 
 log = logging.getLogger("prometheus.learning")
 
-SIGNAL_NAMES = ["sentiment", "momentum", "calibration", "consensus", "predictit", "base_rate"]
+SIGNAL_NAMES = ["momentum", "consensus", "predictit", "volume_spike", "ai_guard", "sentiment", "calibration", "base_rate"]
 
 
 @dataclass

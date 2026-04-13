@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 from data import fetch_current_price
+from risk import Position
 
 
 def sell_position_on_polymarket(token_id: str, shares: float,
@@ -170,6 +171,24 @@ def get_current_price(token_id: str) -> Optional[float]:
     return None
 
 
+
+
+def calc_position_token_entry_price(direction: str, entry_price: float) -> float:
+    return entry_price if direction == "YES" else (1.0 - entry_price)
+
+
+def calc_position_shares(pos_or_direction, entry_price: float | None = None, size_usd: float | None = None) -> float:
+    if hasattr(pos_or_direction, "direction"):
+        direction = pos_or_direction.direction
+        entry = pos_or_direction.entry_price
+        size = pos_or_direction.size_usd
+    else:
+        direction = str(pos_or_direction)
+        entry = float(entry_price or 0)
+        size = float(size_usd or 0)
+    token_entry = calc_position_token_entry_price(direction, entry)
+    return round(size / max(token_entry, 0.001), 6)
+
 def redeem_winning_position(market_id: str, token_id: str,
                              shares: float, poly_key: str = None) -> bool:
     """
@@ -293,44 +312,32 @@ def verify_position_closed(token_id: str, funder: str,
                             retries: int = 3, wait_sec: int = 10) -> bool:
     """
     Проверить что позиция реально закрылась на Polymarket.
-    Опрашивает Data API несколько раз с паузой.
-    
-    Returns:
-        True — позиция закрыта (balance = 0)
-        False — позиция ещё открыта
+    True только если токен точно не найден или его size <= 0.01.
     """
     if not token_id or not funder:
         return False
-    
+
     import time as _time
-    
+
     for attempt in range(retries):
         try:
-            r = requests.get(
-                "https://data-api.polymarket.com/positions",
-                params={"user": funder, "sizeThreshold": "0.01"},
-                timeout=8,
-            )
-            if r.status_code == 200:
-                positions = r.json()
-                # Ищем наш токен — если его нет или size=0 → закрыто
-                for item in positions:
-                    if item.get("asset") == token_id or item.get("token_id") == token_id:
-                        size = float(item.get("size", 0))
-                        if size > 0.01:
-                            log.debug(f"verify: позиция ещё открыта size={size:.2f} (попытка {attempt+1}/{retries})")
-                            if attempt < retries - 1:
-                                _time.sleep(wait_sec)
-                            continue
-                # Токен не найден → закрыто
-                log.info(f"✅ verify: позиция подтверждена закрытой на Polymarket")
+            positions = fetch_polymarket_positions(funder)
+            item = positions.get(token_id)
+            if item is None or float(item.get("size", 0) or 0) <= 0.01:
+                log.info("✅ verify: позиция подтверждена закрытой на Polymarket")
                 return True
+
+            size = float(item.get("size", 0) or 0)
+            log.debug(
+                f"verify: позиция ещё открыта size={size:.4f} "
+                f"(попытка {attempt+1}/{retries})"
+            )
         except Exception as e:
             log.debug(f"verify error: {e}")
-        
+
         if attempt < retries - 1:
             _time.sleep(wait_sec)
-    
+
     log.warning(f"⚠️ verify: позиция НЕ закрыта после {retries} проверок")
     return False
 
@@ -384,6 +391,59 @@ class PositionResolver:
         except Exception as e:
             log.debug(f"Telegram notify error: {e}")
 
+
+    def retry_pending_closures(self) -> list[dict]:
+        poly_key = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+        funder = os.environ.get("POLYMARKET_FUNDER", "")
+        closed_now: list[dict] = []
+        if not poly_key or not funder:
+            return closed_now
+
+        for action in list(self.risk.pending_close_actions):
+            if not action.due(datetime.now(timezone.utc).timestamp()):
+                continue
+
+            pos = next((p for p in self.risk.open_positions if p.market_id == action.market_id), None)
+            if not pos:
+                self.risk.remove_pending_action(action.market_id, "close_retry")
+                continue
+
+            shares = calc_position_shares(pos)
+            sold, actual_price = sell_position_on_polymarket(
+                token_id=action.token_id or pos.token_id or "",
+                shares=shares,
+                poly_key=poly_key,
+            )
+            if sold:
+                confirmed = verify_position_closed(
+                    token_id=action.token_id or pos.token_id or "",
+                    funder=funder,
+                    retries=3,
+                    wait_sec=10,
+                )
+                if confirmed:
+                    current_price = actual_price or action.target_price or 0.0
+                    entry_token = calc_position_token_entry_price(pos.direction, pos.entry_price)
+                    exit_token = max(current_price, 0.0)
+                    pnl = round((exit_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
+                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=current_price, pnl=pnl)
+                    if closed:
+                        closed_now.append(self._make_closed_dict(pos, action.reason or "RETRY_CLOSE", pnl >= 0, pnl))
+                        self._notify(pos, action.reason or "RETRY_CLOSE", pnl >= 0, pnl, current_price)
+                    self.risk.remove_pending_action(action.market_id, "close_retry")
+                    continue
+
+            self.risk.mark_action_attempt(action, error="retry_close_not_confirmed", due_in=action.interval_sec)
+            if action.attempts >= action.max_attempts:
+                self.risk.remove_pending_action(action.market_id, "close_retry")
+                self.risk.pause()
+                if self.tg:
+                    self.tg.error(
+                        f"Не удалось закрыть позицию после {action.max_attempts} попыток: {action.question[:100]}"
+                    )
+        self._signal_outcomes.extend(closed_now)
+        return closed_now
+
     def run(self) -> list[dict]:
         open_pos = self.risk.open_positions
         if not open_pos:
@@ -429,7 +489,7 @@ class PositionResolver:
 
                     # ── REDEEM: забираем выигрыш на баланс ─────────────────
                     if won and poly_key and pos.token_id:
-                        shares = pos.size_usd / max(pos.entry_price, 0.001)
+                        shares = calc_position_shares(pos)
                         log.info(
                             f"💰 Redeem: market={pos.market_id[:12]} "
                             f"token={pos.token_id[:12]} shares≈{shares:.1f}"
@@ -477,7 +537,7 @@ class PositionResolver:
                     pnl = round((current_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
                     
                     # Реально продаём токены на Polymarket
-                    shares = pos.size_usd / max(pos.entry_price, 0.001)
+                    shares = calc_position_shares(pos)
                     sold, actual_price = False, cur_token_price
                     if pos.token_id and poly_key:
                         sold, actual_price = sell_position_on_polymarket(

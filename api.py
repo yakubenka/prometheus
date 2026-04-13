@@ -15,13 +15,21 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Prometheus", version="3.1")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Prometheus", version="3.2")
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS or ["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 API_KEY      = os.environ.get("DASHBOARD_API_KEY", "")
+MANUAL_CLOSE_KEY = os.environ.get("MANUAL_CLOSE_KEY", "")
 DATABASE_URL = (
     os.environ.get("DATABASE_URL") or
     os.environ.get("database_url") or
@@ -102,6 +110,8 @@ def db_last_push():
 
 init_db()
 
+INDEX_PATH = os.path.join(os.path.dirname(__file__), "index.html")
+
 # ── In-memory fallback ─────────────────────────────────────────────────────────
 _mem: dict = {}
 
@@ -120,8 +130,16 @@ def store_get(key: str):
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 def _bot_auth(x_bot_key: str = Header(default="")):
-    if API_KEY and not secrets.compare_digest(x_bot_key, API_KEY):
+    if not API_KEY:
+        raise HTTPException(503, "DASHBOARD_API_KEY is not configured")
+    if not secrets.compare_digest(x_bot_key, API_KEY):
         raise HTTPException(401, "Invalid bot key")
+
+def _manual_close_auth(x_manual_close_key: str = Header(default="")):
+    if not MANUAL_CLOSE_KEY:
+        raise HTTPException(503, "MANUAL_CLOSE_KEY is not configured")
+    if not secrets.compare_digest(x_manual_close_key, MANUAL_CLOSE_KEY):
+        raise HTTPException(401, "Invalid manual close key")
 
 def _alive() -> bool:
     t = db_last_push() if DATABASE_URL else _mem.get("last_push")
@@ -171,7 +189,7 @@ def health():
     }
 
 @app.get("/api/debug/telegram")
-def debug_telegram():
+def debug_telegram(_=Depends(_bot_auth)):
     """
     Проверить работу Telegram прямо из браузера.
     Открой: https://<твой-api>.railway.app/api/debug/telegram
@@ -252,7 +270,7 @@ def positions():
     return store_get("positions") or {"open": [], "closed_today": [], "history": []}
 
 @app.post("/api/close_position")
-async def close_position(request: Request):
+async def close_position(request: Request, _=Depends(_manual_close_auth)):
     """Закрыть позицию вручную из дашборда. Корректно обновляет overview P&L."""
     body = await request.json()
     market_id = body.get("market_id", "")
@@ -370,6 +388,48 @@ def learning():
 @app.get("/api/audit")
 def audit():
     return {"entries": []}
+
+
+
+@app.get("/")
+def dashboard_index():
+    if os.path.exists(INDEX_PATH):
+        return FileResponse(INDEX_PATH)
+    raise HTTPException(404, "Dashboard not found")
+
+@app.get("/api/settings")
+def settings():
+    return {
+        "risk": {
+            "bankroll": float(os.environ.get("BANKROLL", "100") or 100),
+            "max_position_usd": float(os.environ.get("MAX_POSITION_USD", os.environ.get("MAX_POS_USD", "10")) or 10),
+            "min_position_usd": float(os.environ.get("MIN_POSITION_USD", os.environ.get("MIN_POS_USD", "1")) or 1),
+            "max_open_positions": int(os.environ.get("MAX_OPEN_POSITIONS", "10") or 10),
+            "max_daily_loss_usd": float(os.environ.get("MAX_DAILY_LOSS_USD", "50") or 50),
+        },
+        "engine": {
+            "scan_interval_sec": int(os.environ.get("SCAN_INTERVAL_SEC", "60") or 60),
+            "ai_mode": os.environ.get("AI_MODE", "minimal"),
+            "min_trade_quality": int(os.environ.get("MIN_TRADE_QUALITY", "60") or 60),
+            "enable_near_resolution": str(os.environ.get("ENABLE_NEAR_RESOLUTION", "false")).lower() == "true",
+        },
+        "strategy_control": {
+            "strategy_min_trades": int(os.environ.get("STRATEGY_MIN_TRADES", "10") or 10),
+            "strategy_weak_win_rate": float(os.environ.get("STRATEGY_WEAK_WIN_RATE", "0.45") or 0.45),
+            "strategy_reenable_days": int(os.environ.get("STRATEGY_REENABLE_DAYS", "7") or 7),
+            "strategy_weakened_size_mult": float(os.environ.get("STRATEGY_WEAKENED_SIZE_MULT", "0.5") or 0.5),
+            "all_strategies_weak_min_usd": float(os.environ.get("ALL_STRATEGIES_WEAK_MIN_USD", "1") or 1),
+        },
+        "security": {
+            "dashboard_key_set": bool(API_KEY),
+            "manual_close_key_set": bool(MANUAL_CLOSE_KEY),
+        },
+    }
+
+@app.get("/api/strategies")
+def strategies():
+    learning_data = store_get("learning") or {}
+    return {"strategies": (learning_data.get("strategy_stats") or {})}
 
 # ── Admin ──────────────────────────────────────────────────────────────────────
 

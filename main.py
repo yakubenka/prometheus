@@ -14,10 +14,10 @@ import logger as _logger
 from config import cfg
 from telegram import Telegram
 from data import fetch_markets, Market
-from risk import RiskManager
+from risk import RiskManager, PendingAction
 from signals import SignalEngine, EnsembleResult, get_domain_min_edge, get_confidence_kelly_mult
 from smart_money import SmartMoneyMonitor
-from resolver import PositionResolver
+from resolver import PositionResolver, fetch_polymarket_positions
 from learning import LearningEngine
 from intel import IntelPipeline
 from intel_ext import ExtendedIntelPipeline
@@ -25,6 +25,7 @@ from screener import screen
 from position_review import PositionReviewer
 from domain_intel import DomainPrior, build_market_context, portfolio_kelly_size
 from liquidity import is_market_liquid
+from strategy_control import StrategyControl
 
 import logging
 log = logging.getLogger("prometheus.main")
@@ -138,7 +139,7 @@ class Prometheus:
         cfg.validate()
 
         self.tg       = Telegram(cfg.tg_token, cfg.tg_chat)
-        self.ai       = Anthropic(api_key=cfg.anthropic_key)
+        self.ai       = Anthropic(api_key=cfg.anthropic_key) if cfg.ai_mode != "off" and cfg.anthropic_key else None
 
         self.risk     = RiskManager(
             max_position_usd   = cfg.max_pos_usd,
@@ -180,6 +181,15 @@ class Prometheus:
             telegram     = self.tg,
         )
         self._domain_prior = DomainPrior(cfg.logs_dir)
+        self._pending_open_notifies: dict[str, dict] = {}
+        self._strategy_control = StrategyControl(
+            cfg.logs_dir,
+            min_trades=cfg.strategy_min_trades,
+            weak_win_rate=cfg.strategy_weak_win_rate,
+            reenable_days=cfg.strategy_reenable_days,
+            weakened_mult=cfg.strategy_weakened_size_mult,
+            all_weak_min_usd=cfg.all_strategies_weak_min_usd,
+        )
 
         # Graceful shutdown
         _signal.signal(_signal.SIGTERM, self._on_signal)
@@ -199,8 +209,10 @@ class Prometheus:
         while not self._shutdown:
             try:
                 self._maybe_daily_report()
+                self._process_pending_orders()
                 self._resolve_positions()
                 self._review_positions()
+                self._process_pending_orders()
                 self._run_intel()
                 self._check_risk_alerts()
                 self._trade_cycle()
@@ -226,6 +238,119 @@ class Prometheus:
         log.info("Prometheus остановлен")
 
     # ── Steps ──────────────────────────────────────────────────────────────────
+
+
+    def _alert_and_pause(self, message: str) -> None:
+        if not self.risk.is_paused:
+            self.risk.pause()
+        log.error(message)
+        self.tg.error(message)
+
+
+    def _notify_strategy_change(self, change: dict) -> None:
+        if not change:
+            return
+        stats = change.get("stats", {})
+        msg = (
+            "🧭 *Strategy update*\n\n"
+            f"*{change.get('strategy','unknown')}*\n"
+            f"`{change.get('from','?')}` → *{change.get('to','?')}*\n"
+            f"Причина: `{change.get('reason','')}`\n"
+            f"Trades: *{stats.get('trades', 0)}* | WR: *{stats.get('win_rate', 0):.0%}*\n"
+            f"PnL: *${stats.get('pnl', 0):+.2f}* | ROI: *{stats.get('roi', 0):+.1%}*"
+        )
+        self.tg.send(msg)
+
+    def _register_open_after_execution(
+        self,
+        *,
+        market_id: str,
+        question: str,
+        direction: str,
+        entry_price: float,
+        size_usd: float,
+        tags: list,
+        signal_type: str,
+        token_id: str | None,
+        slug: str | None,
+        notify_kwargs: dict,
+    ) -> None:
+        if cfg.dry_run:
+            self.risk.open(
+                market_id, question, direction, entry_price, size_usd,
+                tags, signal_type, token_id=token_id, slug=slug,
+            )
+            self.tg.position_opened(**notify_kwargs)
+            return
+
+        if not token_id or not cfg.poly_funder:
+            self._alert_and_pause(
+                f"Не могу подтвердить открытие на Polymarket: token_id/funder отсутствуют | {question[:80]}"
+            )
+            return
+
+        self.risk.register_pending_open(
+            market_id=market_id,
+            question=question,
+            direction=direction,
+            entry_price=entry_price,
+            size_usd=size_usd,
+            tags=tags,
+            signal_type=signal_type,
+            token_id=token_id,
+            slug=slug,
+            max_attempts=cfg.max_order_retries,
+            interval_sec=cfg.open_verify_interval_sec,
+        )
+        self._pending_open_notifies[market_id] = notify_kwargs
+
+    def _process_pending_opens(self) -> None:
+        if cfg.dry_run or not cfg.poly_funder:
+            return
+        pending = self.risk.pending_open_actions
+        if not pending:
+            return
+
+        real_positions = fetch_polymarket_positions(cfg.poly_funder)
+        now_ts = time.time()
+
+        for action in pending:
+            if not action.due(now_ts):
+                continue
+            real_pos = real_positions.get(action.token_id or "")
+            if real_pos and float(real_pos.get("size", 0) or 0) > 0.01:
+                self.risk.open(
+                    action.market_id, action.question, action.direction,
+                    action.entry_price, action.size_usd, action.tags,
+                    action.signal_type, token_id=action.token_id, slug=action.slug,
+                )
+                notify_kwargs = self._pending_open_notifies.pop(action.market_id, None)
+                if notify_kwargs:
+                    self.tg.position_opened(**notify_kwargs)
+                self.risk.remove_pending_action(action.market_id, "open_verify")
+                log.info(f"✅ Подтверждено открытие на Polymarket: {action.question[:60]}")
+                continue
+
+            self.risk.mark_action_attempt(
+                action,
+                error="position_not_visible_on_polymarket",
+                due_in=cfg.open_verify_interval_sec,
+            )
+            if action.attempts >= action.max_attempts:
+                self.risk.remove_pending_action(action.market_id, "open_verify")
+                self._pending_open_notifies.pop(action.market_id, None)
+                self._alert_and_pause(
+                    f"Не удалось подтвердить открытие сделки после {action.max_attempts} попыток: {action.question[:80]}"
+                )
+
+    def _process_pending_orders(self) -> None:
+        self._process_pending_opens()
+        try:
+            pending_closed = self.resolver.retry_pending_closures()
+            if pending_closed:
+                self._push_to_api()
+        except Exception as e:
+            log.warning(f"Pending close retry error: {e}")
 
     def _resolve_positions(self) -> None:
         closed = self.resolver.run()
@@ -283,6 +408,17 @@ class Prometheus:
                             win_rate = st.win_rate,
                             total    = st.total,
                         )
+            change = self._strategy_control.record_close(
+                market_id=c["market_id"],
+                strategy_type=c.get("signal_type", "market_data"),
+                pnl=c["pnl"],
+                won=c["won"],
+                size_usd=c.get("size_usd", 0.0),
+            )
+            if change:
+                self._notify_strategy_change(change)
+            for reenabled in self._strategy_control.refresh_states():
+                self._notify_strategy_change(reenabled)
             # Чистим после использования
             self._market_signals.pop(c["market_id"], None)
 
@@ -361,6 +497,9 @@ class Prometheus:
             return
 
         ai_trades = sm_trades = 0
+        self.signals.reset_cycle_budget()
+        for reenabled in self._strategy_control.refresh_states():
+            self._notify_strategy_change(reenabled)
 
         # 1. Smart Money
         sm_signals = self.sm.scan()
@@ -410,19 +549,33 @@ class Prometheus:
                 token_id_no  = sig.token_id if sig.direction == "NO"  else None
 
             if _execute(_Mkt(), sig.direction, decision.size_usd, sig.entry_price):
-                self.risk.open(
-                    sig.market_id, sig.question, sig.direction,
-                    sig.entry_price, decision.size_usd,
-                    list(sig.wallet.specializations), "smart_money",
-                    token_id = sig.token_id or None,
-                    slug     = sig.slug     or None,
-                )
                 sm_trades += 1
-                # Строим URL для Smart Money сигнала
-                import urllib.parse as _up
-                _sm_url = (f"https://polymarket.com/event/{sig.slug}"
-                           if sig.slug
-                           else f"https://polymarket.com/?s={_up.quote(sig.question[:100])}")
+                self._register_open_after_execution(
+                    market_id=sig.market_id,
+                    question=sig.question,
+                    direction=sig.direction,
+                    entry_price=sig.entry_price,
+                    size_usd=decision.size_usd,
+                    tags=list(sig.wallet.specializations),
+                    signal_type="smart_money",
+                    token_id=sig.token_id or None,
+                    slug=sig.slug or None,
+                    notify_kwargs={
+                        "question": sig.question,
+                        "direction": sig.direction,
+                        "price": sig.entry_price,
+                        "size": decision.size_usd,
+                        "edge": 0.0,
+                        "confidence": "high",
+                        "reasoning": sig.reasoning,
+                        "dry_run": cfg.dry_run,
+                        "signals": None,
+                        "signal_type": "smart_money",
+                        "url": (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
+                        "domain_mult": 1.0,
+                        "timing": "",
+                    },
+                )
                 self.tg.insider_detected(
                     question     = sig.question,
                     direction    = sig.direction,
@@ -433,7 +586,7 @@ class Prometheus:
                     win_rate     = sig.wallet.win_rate,
                     roi          = sig.wallet.roi,
                     reasoning    = sig.reasoning,
-                    url          = _sm_url,
+                    url          = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
                 )
 
         # 2. Двухэтапный анализ рынков
@@ -445,29 +598,28 @@ class Prometheus:
         self._daily_signals += len(all_markets)
         log.info(f"Рынков загружено: {len(all_markets)} (из 50)")
 
-        # Этап 2: полный AI анализ топ-10 кандидатов
-        # В DRY RUN берём топ-15 для накопления данных
-        top_n = 15 if cfg.dry_run else cfg.max_markets
+        # Этап 2: анализ кандидатов. AI подключается редко внутри SignalEngine.
+        top_n = 20 if cfg.dry_run else max(cfg.max_markets, 20)
         candidates = screen(all_markets, top_n=top_n, fetch_kalshi=False)
-        log.info(f"После скрининга: {len(candidates)} кандидатов для AI")
+        log.info(f"После скрининга: {len(candidates)} кандидатов для decision engine")
 
-        # Near-Resolution Strategy: рынки 85-97% которые закрываются < 5 дней
-        # Высокий win rate, быстрый оборот капитала, маленький размер позиции
-        near_res = self._find_near_resolution(all_markets)
-        if near_res:
-            log.info(f"Near-resolution markets: {len(near_res)}")
+        if cfg.enable_near_resolution:
+            near_res = self._find_near_resolution(all_markets)
+            if near_res:
+                log.info(f"Near-resolution markets: {len(near_res)}")
 
         for cand in candidates:
             market = cand.market
             if not self.risk.snapshot()["can_trade"]:
                 break
 
-            result: EnsembleResult = self.signals.analyze(market)
+            result: EnsembleResult = self.signals.analyze(market, pre_score=cand.pre_score)
             log.info(
                 f"  {market.question[:55]}\n"
                 f"  pre={cand.pre_score:.2f} → {result.direction} "
                 f"edge={result.edge:.2%} prob={result.ai_probability:.2%} "
-                f"conf={result.confidence} | {cand.reason}"
+                f"conf={result.confidence} quality={result.trade_quality} "
+                f"strategy={result.strategy_type} ai={'yes' if result.ai_used else 'no'} | {cand.reason}"
             )
 
             # Записываем сигнал в историю
@@ -491,18 +643,34 @@ class Prometheus:
             if result.direction == "NEUTRAL":
                 continue
 
+            if result.trade_quality < cfg.min_trade_quality:
+                log.info(f"  Quality {result.trade_quality} < min {cfg.min_trade_quality} — skip")
+                continue
+
             # Adaptive min_edge по домену (крипто=10%, политика=4%)
             domain_min_edge = get_domain_min_edge(list(market.tags), cfg.min_edge)
             if result.edge < domain_min_edge:
                 log.info(f"  Edge {result.edge:.1%} < domain_min {domain_min_edge:.1%} — skip")
                 continue
 
-            # Большой edge (>20%) — входим даже при low confidence
+            # Консервативно: low confidence почти всегда пропускаем
             if result.confidence == "low":
-                if result.edge >= 0.20:
-                    log.info(f"  High-edge override: edge={result.edge:.1%} conf=low")
+                if result.strategy_type == "cross_market_gap" and result.edge >= max(0.12, domain_min_edge):
+                    log.info(f"  Cross-market override: edge={result.edge:.1%} conf=low")
                 else:
                     continue
+
+            if result.strategy_type == "ai_assisted" and result.edge < max(cfg.ai_unconfirmed_edge, domain_min_edge + 0.02):
+                log.info(f"  AI-assisted edge too small ({result.edge:.1%}) — skip")
+                continue
+            if result.strategy_type == "ai_assisted":
+                log.info("  AI-assisted entries disabled — AI is filter only")
+                continue
+
+            strategy_mult = self._strategy_control.size_multiplier(result.strategy_type)
+            if strategy_mult <= 0:
+                log.info(f"  Strategy {result.strategy_type} disabled by strategy control — skip")
+                continue
 
             # Строим контекст рынка (domain prior, timing, microstructure)
             token_id_for_ctx = (market.token_id_yes if result.direction == "YES"
@@ -542,6 +710,16 @@ class Prometheus:
                 size = size * 0.6
                 log.info(f"  Micro contra-signal ({mctx.microstructure.reasoning}): size reduced")
 
+            if strategy_mult < 1.0:
+                size = max(1.0, size * strategy_mult)
+                log.info(f"  Strategy control mult {strategy_mult:.0%}: ${size:.2f}")
+
+            if self._strategy_control.all_primary_strategies_weak():
+                size = min(max(1.0, size), self._strategy_control.all_weak_min_usd)
+                log.info(f"  All primary strategies weak: minimal exploratory size ${size:.2f}")
+
+            size = min(cfg.max_pos_usd, max(1.0, size))
+
             decision = self.risk.check(market.id, size, list(market.tags))
             if not decision.allowed:
                 log.info(f"AI risk block: {decision.reason}")
@@ -558,27 +736,33 @@ class Prometheus:
             if _execute(market, result.direction, decision.size_usd, price):
                 token = (market.token_id_yes if result.direction == "YES"
                          else market.token_id_no)
-                self.risk.open(market.id, market.question, result.direction,
-                               price, decision.size_usd, list(market.tags),
-                               "ai", token_id=token, slug=market.slug)
-                # Сохраняем сигналы для learning после резолюции
                 self._market_signals[market.id] = result.signals
                 ai_trades += 1
-                # Telegram уведомление об открытии
-                self.tg.position_opened(
-                    question    = market.question,
-                    direction   = result.direction,
-                    price       = price,
-                    size        = decision.size_usd,
-                    edge        = result.edge,
-                    confidence  = result.confidence,
-                    reasoning   = result.reasoning,
-                    dry_run     = cfg.dry_run,
-                    signals     = result.signals,
-                    signal_type = "ai",
-                    url         = market.polymarket_url,
-                    domain_mult = mctx.domain_multiplier,
-                    timing      = mctx.timing_reason,
+                self._register_open_after_execution(
+                    market_id=market.id,
+                    question=market.question,
+                    direction=result.direction,
+                    entry_price=price,
+                    size_usd=decision.size_usd,
+                    tags=list(market.tags),
+                    signal_type=result.strategy_type,
+                    token_id=token,
+                    slug=market.slug,
+                    notify_kwargs={
+                        "question": market.question,
+                        "direction": result.direction,
+                        "price": price,
+                        "size": decision.size_usd,
+                        "edge": result.edge,
+                        "confidence": result.confidence,
+                        "reasoning": result.reasoning,
+                        "dry_run": cfg.dry_run,
+                        "signals": result.signals,
+                        "signal_type": result.strategy_type,
+                        "url": market.polymarket_url,
+                        "domain_mult": mctx.domain_multiplier,
+                        "timing": mctx.timing_reason,
+                    },
                 )
                 # Microstructure уведомление если сильный сигнал
                 if (mctx.microstructure and
@@ -665,20 +849,28 @@ class Prometheus:
             if _execute(market, direction, decision.size_usd, price):
                 token = (market.token_id_yes if direction == "YES"
                          else market.token_id_no)
-                self.risk.open(market.id, market.question, direction,
-                               price, decision.size_usd, list(market.tags),
-                               "ai", token_id=token, slug=market.slug)
-                self.tg.position_opened(
-                    question    = market.question,
-                    direction   = direction,
-                    price       = price,
-                    size        = decision.size_usd,
-                    edge        = 1.0 - price,
-                    confidence  = "high",
-                    reasoning   = f"Near-resolution: {days_left:.1f}d left @ {price:.1%}",
-                    dry_run     = cfg.dry_run,
-                    signal_type = "near_resolution",
-                    url         = market.polymarket_url,
+                self._register_open_after_execution(
+                    market_id=market.id,
+                    question=market.question,
+                    direction=direction,
+                    entry_price=price,
+                    size_usd=decision.size_usd,
+                    tags=list(market.tags),
+                    signal_type="near_resolution",
+                    token_id=token,
+                    slug=market.slug,
+                    notify_kwargs={
+                        "question": market.question,
+                        "direction": direction,
+                        "price": price,
+                        "size": decision.size_usd,
+                        "edge": 1.0 - price,
+                        "confidence": "high",
+                        "reasoning": f"Near-resolution: {days_left:.1f}d left @ {price:.1%}",
+                        "dry_run": cfg.dry_run,
+                        "signal_type": "near_resolution",
+                        "url": market.polymarket_url,
+                    },
                 )
                 results.append(market)
 
@@ -817,6 +1009,7 @@ class Prometheus:
                     "signal_stats": learning_stats,
                     "domain_stats": self._domain_prior.stats_summary(),
                     "type_stats":   self.learning.stats_by_type(),
+                    "strategy_stats": self._strategy_control.summary(),
                 },
             }
 

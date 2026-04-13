@@ -1,26 +1,23 @@
 """
-Prometheus — Signal Engine v4.0
-6 независимых сигналов → ensemble → итоговое решение.
+Prometheus — Signal Engine v5.0
+Decision engine стал более датовым и экономным по AI:
 
-УЛУЧШЕНИЯ v4.0:
-1. Chain-of-Thought промпты — Claude рассуждает пошагово, не угадывает
-2. description рынка включён в контекст — правила резолюции критически важны
-3. Параллельные AI запросы — все 3 вызова одновременно через ThreadPoolExecutor
-4. Adaptive min_edge по домену — крипто требует 10%, политика 4%
-5. Position sizing по confidence — плавный, не бинарный
-6. Volume anomaly detection — hourly spike как отдельный сигнал
-7. Question type tagging — electoral/economic/geopolitical/binary для точности
+- сначала считаем не-AI сигналы
+- AI вызывается редко и только как sanity check
+- итоговый вход требует quality score и внешнее подтверждение
 """
 from __future__ import annotations
 import json
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
+
 import requests
 from anthropic import Anthropic
+
+from config import cfg
 from data import Market, fetch_market_price_history
 
 if TYPE_CHECKING:
@@ -29,32 +26,31 @@ if TYPE_CHECKING:
 log = logging.getLogger("prometheus.signals")
 
 _S = requests.Session()
-_S.headers["User-Agent"] = "Prometheus/3.0"
+_S.headers["User-Agent"] = "Prometheus/5.0"
 
-_MODEL_FAST  = "claude-haiku-4-5-20251001"
-_MODEL_SMART = "claude-sonnet-4-20250514"
+_MODEL_FAST = "claude-haiku-4-5-20251001"
 
-# Adaptive min_edge по типу рынка
 _DOMAIN_MIN_EDGE = {
-    "crypto":      0.10,   # волатильны, нужен большой edge
-    "sports":      0.08,   # непредсказуемы
-    "macro":       0.06,   # умеренно
-    "politics":    0.04,   # стабильны, меньший edge OK
+    "crypto":      0.10,
+    "sports":      0.08,
+    "macro":       0.06,
+    "politics":    0.04,
     "geopolitics": 0.05,
     "tech":        0.06,
     "other":       0.05,
 }
 
-# Confidence → Kelly multiplier (плавный)
 _CONF_KELLY = {
     "high":   1.00,
     "medium": 0.70,
     "low":    0.40,
 }
 
+_AI_SIGNAL_NAMES = {"ai_guard", "sentiment", "calibration", "base_rate"}
+_NON_AI_SIGNAL_NAMES = {"momentum", "consensus", "predictit", "volume_spike"}
+
 
 def get_domain_min_edge(tags: list, default: float = 0.05) -> float:
-    """Минимальный edge для данного набора тегов."""
     for tag in (tags or []):
         t = str(tag).lower()
         if t in _DOMAIN_MIN_EDGE:
@@ -63,7 +59,6 @@ def get_domain_min_edge(tags: list, default: float = 0.05) -> float:
 
 
 def get_confidence_kelly_mult(confidence: str) -> float:
-    """Плавный multiplier размера позиции по confidence."""
     return _CONF_KELLY.get(confidence, 0.50)
 
 
@@ -86,7 +81,11 @@ class EnsembleResult:
     confidence:     str
     signals:        list[Signal] = field(default_factory=list)
     reasoning:      str = ""
-    question_type:  str = "general"   # electoral/economic/geopolitical/binary
+    question_type:  str = "general"
+    trade_quality:  int = 0
+    strategy_type:  str = "market_data"
+    ai_used:        bool = False
+    ai_calls_used:  int = 0
 
 
 def _parse_ai_json(text: str) -> dict:
@@ -95,11 +94,7 @@ def _parse_ai_json(text: str) -> dict:
 
 
 def _classify_question(question: str) -> str:
-    """
-    Определить тип вопроса для точного трекинга точности.
-    electoral / economic / geopolitical / celebrity / binary / general
-    """
-    q = question.lower()
+    q = (question or "").lower()
     if any(w in q for w in ["election", "vote", "president", "senator", "congress", "poll"]):
         return "electoral"
     if any(w in q for w in ["fed", "rate", "inflation", "gdp", "cpi", "recession", "market"]):
@@ -113,242 +108,141 @@ def _classify_question(question: str) -> str:
     return "general"
 
 
-def _build_rich_context(market: Market, intel=None) -> str:
-    """
-    Строим максимально богатый контекст для AI.
-    НОВОЕ: включаем description рынка (правила резолюции критически важны).
-    НОВОЕ: volume anomaly detection (hourly vs daily).
-    """
-    parts = []
-
-    # 1. Intel — новости и данные
-    if intel:
-        try:
-            # Ищем по вопросу И по description для лучшего покрытия
-            search_text = market.question
-            if market.description:
-                search_text += " " + market.description[:200]
-            news = intel.context_for(search_text, hours=24)
-            if news and "No recent" not in news:
-                parts.append(f"Recent intelligence:\n{news}")
-        except Exception:
-            pass
-
-    # 2. История цены + volume anomaly
-    try:
-        history = fetch_market_price_history(market.id, days=7)
-        prices  = [float(p["p"]) for p in history if p.get("p")]
-        if len(prices) >= 4:
-            cur   = prices[-1]
-            p24   = prices[max(0, len(prices) - 24)]
-            p7d   = prices[0]
-            high7 = max(prices)
-            low7  = min(prices)
-            m24   = cur - p24
-            m7d   = cur - p7d
-            price_str = (
-                f"Price history:\n"
-                f"  Current: {cur:.3f} | 24h: {m24:+.3f} | 7d: {m7d:+.3f}\n"
-                f"  7d range: {low7:.3f} - {high7:.3f}"
-            )
-            parts.append(price_str)
-    except Exception:
-        pass
-
-    # 3. Время до закрытия
-    days_left = "unknown"
+def _build_market_snapshot(market: Market, intel=None) -> str:
+    parts = [
+        f"Market: {market.question}",
+        f"Current yes price: {market.yes_price:.3f}",
+        f"24h volume: ${market.volume_24h:,.0f}",
+    ]
+    if market.description:
+        parts.append(f"Resolution rules: {market.description[:300]}")
     if market.end_date:
         try:
             end = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
-            dl  = (end - datetime.now(timezone.utc)).days
-            days_left = f"{dl} days"
+            days_left = max(0.0, (end - datetime.now(timezone.utc)).total_seconds() / 86400)
+            parts.append(f"Days left: {days_left:.1f}")
         except Exception:
             pass
-
-    # 4. Основная информация + description (НОВОЕ)
-    market_info = (
-        f"Market: {market.question}\n"
-        f"Current price: {market.yes_price:.3f} ({market.yes_price:.1%})\n"
-        f"Closes in: {days_left} | Volume 24h: ${market.volume_24h:,.0f}"
-    )
-    if market.description and len(market.description) > 50:
-        market_info += f"\nResolution rules: {market.description[:400]}"
-    parts.append(market_info)
-
-    return "\n\n".join(parts)
+    if intel:
+        try:
+            news = intel.context_for(market.question, hours=24)
+            if news and "No recent" not in news:
+                parts.append(f"Recent news:\n{news[:500]}")
+        except Exception:
+            pass
+    return "\n".join(parts)
 
 
 def _detect_volume_anomaly(market: Market) -> Optional[Signal]:
-    """
-    НОВОЕ: резкий рост объёма (5x за час) = кто-то что-то знает.
-    Это самый сильный сигнал — сильнее любого AI.
-    """
     try:
-        # Получаем часовую историю объёма
-        r = _S.get(
-            "https://gamma-api.polymarket.com/markets",
-            params={"id": market.id},
-            timeout=5,
-        )
+        r = _S.get("https://gamma-api.polymarket.com/markets", params={"id": market.id}, timeout=5)
         if r.status_code != 200:
             return None
-
         data = r.json()
         items = data if isinstance(data, list) else data.get("data", [data])
         if not items:
             return None
-
         m = items[0] if isinstance(items, list) else items
-        vol_1h  = float(m.get("volume1hr", 0) or 0)
+        vol_1h = float(m.get("volume1hr", 0) or 0)
         vol_24h = float(m.get("volume24hr", 0) or market.volume_24h or 0)
-
-        if vol_24h <= 0 or vol_1h <= 0:
+        if vol_1h <= 0 or vol_24h <= 0:
             return None
-
-        # Ожидаемый объём за час = vol_24h / 24
         expected_1h = vol_24h / 24
         if expected_1h <= 0:
             return None
-
         spike = vol_1h / expected_1h
-
-        if spike >= 8.0:
-            # Экстремальный spike — очень сильный сигнал
-            return Signal(
-                "volume_spike", market.yes_price, 0.80,
-                "NEUTRAL",  # не знаем направление, но что-то происходит
-                f"Volume spike {spike:.1f}x normal (${vol_1h:,.0f}/h vs avg ${expected_1h:,.0f}/h)"
-            )
-        elif spike >= 4.0:
-            return Signal(
-                "volume_spike", market.yes_price, 0.50,
-                "NEUTRAL",
-                f"Volume elevated {spike:.1f}x (${vol_1h:,.0f}/h)"
-            )
+        if spike >= 6.0:
+            return Signal("volume_spike", market.yes_price, 0.70, "NEUTRAL", f"Volume spike {spike:.1f}x")
+        if spike >= 3.5:
+            return Signal("volume_spike", market.yes_price, 0.45, "NEUTRAL", f"Volume elevated {spike:.1f}x")
         return None
     except Exception as e:
-        log.debug(f"Volume anomaly: {e}")
+        log.debug(f"Volume anomaly error: {e}")
         return None
 
 
 class SignalEngine:
     DEFAULT_WEIGHTS = {
-        "sentiment":     0.26,
-        "momentum":      0.15,
-        "calibration":   0.22,
-        "consensus":     0.14,
-        "predictit":     0.10,
-        "base_rate":     0.08,
-        "volume_spike":  0.05,
+        "momentum":     0.20,
+        "consensus":    0.34,
+        "predictit":    0.24,
+        "volume_spike": 0.08,
+        "ai_guard":     0.14,
+        "sentiment":    0.06,
+        "calibration":  0.04,
+        "base_rate":    0.04,
     }
 
-    def __init__(self, ai: Anthropic,
-                 intel: Optional["IntelPipeline"] = None) -> None:
-        self.ai      = ai
-        self.intel   = intel
+    def __init__(self, ai: Optional[Anthropic], intel: Optional["IntelPipeline"] = None) -> None:
+        self.ai = ai
+        self.intel = intel
         self.weights = dict(self.DEFAULT_WEIGHTS)
+        self._ai_budget_remaining = cfg.ai_request_budget_per_cycle
 
-    def analyze(self, market: Market) -> EnsembleResult:
-        ctx           = _build_rich_context(market, self.intel)
+    def reset_cycle_budget(self) -> None:
+        self._ai_budget_remaining = cfg.ai_request_budget_per_cycle
+
+    def analyze(self, market: Market, pre_score: float = 0.0) -> EnsembleResult:
         question_type = _classify_question(market.question)
+        signals = self._run_non_ai_parallel(market)
+        initial = self._ensemble(market, signals)
+        quality = self._trade_quality(market, initial, signals, pre_score)
+        strategy = self._strategy_type(initial.direction, signals, ai_used=False)
 
-        # Параллельные AI запросы через ThreadPoolExecutor
-        # consensus и predictit — HTTP запросы (не AI), тоже параллельно
-        signals = self._run_parallel(market, ctx)
-
-        # Volume anomaly — быстро, без AI
-        vol_sig = _detect_volume_anomaly(market)
-        if vol_sig:
-            vol_sig.weight = self.weights.get("volume_spike", 0.05)
-            signals.append(vol_sig)
-            log.info(f"  📊 Volume anomaly: {vol_sig.reasoning}")
-
-        for s in signals:
-            if s.weight == 0.0:
-                s.weight = self.weights.get(s.name, 0.05)
+        ai_signal = None
+        if self._should_call_ai(initial, quality, signals):
+            ai_signal = self._ai_guard(market)
+            if ai_signal:
+                ai_signal.weight = self.weights.get("ai_guard", 0.14)
+                signals.append(ai_signal)
+                self._ai_budget_remaining = max(0, self._ai_budget_remaining - 1)
 
         result = self._ensemble(market, signals)
         result.question_type = question_type
+        result.trade_quality = self._trade_quality(market, result, signals, pre_score)
+        result.strategy_type = self._strategy_type(result.direction, signals, ai_used=ai_signal is not None)
+        result.ai_used = ai_signal is not None
+        result.ai_calls_used = 1 if ai_signal is not None else 0
+
+        if result.trade_quality < cfg.min_trade_quality:
+            result.direction = "NEUTRAL"
+            result.confidence = "low"
+            result.reasoning = f"quality={result.trade_quality} below threshold"
+        elif result.strategy_type == "ai_assisted" and result.edge < max(cfg.ai_unconfirmed_edge, get_domain_min_edge(list(market.tags), cfg.min_edge)):
+            result.direction = "NEUTRAL"
+            result.confidence = "low"
+            result.reasoning = "AI-assisted setup without enough edge"
+
         return result
 
-    def _run_parallel(self, market: Market, ctx: str) -> list[Signal]:
-        """
-        НОВОЕ: запускаем все сигналы параллельно.
-        AI вызовы (sentiment, calibration, base_rate) + HTTP (consensus, predictit) — всё одновременно.
-        Ускорение: с ~15 сек до ~5 сек на рынок.
-        """
-        # Small jitter on AI calls to avoid simultaneous rate limit hits
-        def _with_jitter(fn, delay=0.0):
-            def wrapper():
-                if delay > 0:
-                    time.sleep(delay)
-                return fn()
-            return wrapper
-
+    def _run_non_ai_parallel(self, market: Market) -> list[Signal]:
         tasks = {
-            "sentiment":   _with_jitter(lambda: self._sentiment(market, ctx), 0.0),
-            "momentum":    lambda: self._momentum(market),   # no AI, no jitter
-            "calibration": _with_jitter(lambda: self._calibration(market, ctx), 0.3),
-            "consensus":   lambda: self._consensus(market),  # HTTP only
-            "predictit":   lambda: self._predictit(market),  # HTTP only
-            "base_rate":   _with_jitter(lambda: self._base_rate(market, ctx), 0.6),
+            "momentum": lambda: self._momentum(market),
+            "consensus": lambda: self._consensus(market),
+            "predictit": lambda: self._predictit(market),
+            "volume_spike": lambda: _detect_volume_anomaly(market) or Signal("volume_spike", market.yes_price, 0.10, "NEUTRAL", "no anomaly"),
         }
-
         results: dict[str, Signal] = {}
-
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {executor.submit(fn): name for name, fn in tasks.items()}
-            try:
-                for future in as_completed(futures, timeout=45):
-                    name = futures[future]
-                    try:
-                        results[name] = future.result()
-                    except Exception as e:
-                        log.debug(f"Signal {name} failed: {e}")
-                        results[name] = Signal(name, market.yes_price, 0.10,
-                                               "NEUTRAL", "error")
-            except Exception as timeout_err:
-                # Некоторые futures не завершились вовремя — используем что есть
-                log.debug(f"Signals timeout: {timeout_err}")
-                for future, name in futures.items():
-                    if name not in results:
-                        if future.done():
-                            try:
-                                results[name] = future.result()
-                            except Exception:
-                                pass
-                        if name not in results:
-                            results[name] = Signal(name, market.yes_price, 0.10,
-                                                   "NEUTRAL", "error")
-
-        # Возвращаем в фиксированном порядке
-        return [results.get(name, Signal(name, market.yes_price, 0.10, "NEUTRAL", "error"))
-                for name in tasks]
-
-    def _sentiment(self, market: Market, ctx: str) -> Signal:
-        """
-        НОВОЕ: Chain-of-Thought промпт.
-        Claude рассуждает пошагово: факты → аргументы за → против → итог.
-        """
-        prompt = (
-            f"{ctx}\n\n"
-            f"TASK: Estimate the TRUE probability this market resolves YES.\n\n"
-            f"Think step by step:\n"
-            f"1. What are the KEY FACTS from the context above?\n"
-            f"2. What are the strongest arguments FOR YES?\n"
-            f"3. What are the strongest arguments AGAINST YES (for NO)?\n"
-            f"4. What is your final probability estimate?\n\n"
-            f"Be precise. Consider the resolution rules carefully.\n"
-            f"The market price is {market.yes_price:.1%} — your job is to find if it's WRONG.\n\n"
-            f'Return ONLY JSON: {{"probability":0.0,"confidence":"low|medium|high","reasoning":"one sentence max 100 chars"}}'
-        )
-        return self._ai_call("sentiment", prompt, market.yes_price, model=_MODEL_SMART,
-                              max_tokens=250)
+            for future in as_completed(futures, timeout=20):
+                name = futures[future]
+                try:
+                    results[name] = future.result()
+                except Exception as e:
+                    log.debug(f"Signal {name} failed: {e}")
+                    results[name] = Signal(name, market.yes_price, 0.10, "NEUTRAL", "error")
+        out = []
+        for name in tasks:
+            sig = results.get(name, Signal(name, market.yes_price, 0.10, "NEUTRAL", "error"))
+            sig.weight = self.weights.get(sig.name, 0.05)
+            out.append(sig)
+        return out
 
     def _momentum(self, market: Market) -> Signal:
         try:
             history = fetch_market_price_history(market.id, days=3)
-            prices  = [float(p["p"]) for p in history if p.get("p")]
+            prices = [float(p["p"]) for p in history if p.get("p")]
             if len(prices) < 6:
                 return Signal("momentum", market.yes_price, 0.2, "NEUTRAL", "insufficient history")
             cur = prices[-1]
@@ -356,59 +250,14 @@ class SignalEngine:
             d72 = prices[0]
             m24 = cur - d24
             m72 = cur - d72
-
-            # Добавляем acceleration: ускоряется ли движение?
-            d12  = prices[max(0, len(prices) - 12)]
-            m12  = cur - d12
-            accel = m12 - (m24 / 2)  # положительный = ускорение
-
-            if m24 > 0.07 and m72 > 0.10:
-                conf = 0.85 if accel > 0 else 0.75
-                return Signal("momentum", min(0.90, cur + m24*0.3), conf,
-                              "YES", f"Strong bullish +{m24:.1%}/24h +{m72:.1%}/3d{'↑' if accel>0 else ''}")
-            if m24 > 0.04 and m72 > 0.05:
-                return Signal("momentum", min(0.82, cur + m24*0.2), 0.60,
-                              "YES", f"Moderate bullish +{m24:.1%}/24h")
-            if m24 < -0.07 and m72 < -0.10:
-                conf = 0.85 if accel < 0 else 0.75
-                return Signal("momentum", max(0.10, cur + m24*0.3), conf,
-                              "NO", f"Strong bearish {m24:.1%}/24h {m72:.1%}/3d{'↓' if accel<0 else ''}")
-            if m24 < -0.04 and m72 < -0.05:
-                return Signal("momentum", max(0.18, cur + m24*0.2), 0.60,
-                              "NO", f"Moderate bearish {m24:.1%}/24h")
-            return Signal("momentum", cur, 0.25, "NEUTRAL",
-                          f"No clear trend (24h: {m24:+.1%})")
+            if m24 > 0.08 and m72 > 0.10:
+                return Signal("momentum", min(0.90, cur + m24 * 0.20), 0.60, "YES", f"up {m24:.1%}/24h")
+            if m24 < -0.08 and m72 < -0.10:
+                return Signal("momentum", max(0.10, cur + m24 * 0.20), 0.60, "NO", f"down {abs(m24):.1%}/24h")
+            return Signal("momentum", cur, 0.25, "NEUTRAL", f"flat {m24:+.1%}/24h")
         except Exception as e:
-            log.debug(f"Momentum: {e}")
+            log.debug(f"Momentum error: {e}")
             return Signal("momentum", market.yes_price, 0.15, "NEUTRAL", "error")
-
-    def _calibration(self, market: Market, ctx: str) -> Signal:
-        """
-        НОВОЕ: Chain-of-Thought для calibration.
-        Явно просим привести аналогичные исторические случаи.
-        """
-        prompt = (
-            f"{ctx}\n\n"
-            f"TASK: What is the TRUE probability based on HISTORICAL BASE RATES?\n\n"
-            f"Think step by step:\n"
-            f"1. What TYPE of event is this? (election/economic/geopolitical/other)\n"
-            f"2. What are 2-3 COMPARABLE historical events and their outcomes?\n"
-            f"3. Based on base rates from history, what probability is justified?\n"
-            f"IMPORTANT: Completely ignore the current market price of {market.yes_price:.1%}.\n\n"
-            f'Return ONLY JSON: {{"base_rate":0.0,"confidence":"low|medium|high","reasoning":"one sentence max 100 chars"}}'
-        )
-        try:
-            resp  = self._raw_ai_call(prompt, max_tokens=200, model=_MODEL_SMART)
-            data  = _parse_ai_json(resp)
-            base  = float(data["base_rate"])
-            conf  = {"low": 0.3, "medium": 0.6, "high": 0.85}.get(
-                data.get("confidence", "medium"), 0.5)
-            diff  = base - market.yes_price
-            direc = "YES" if diff > 0.04 else "NO" if diff < -0.04 else "NEUTRAL"
-            return Signal("calibration", base, conf, direc, data.get("reasoning", ""))
-        except Exception as e:
-            log.debug(f"Calibration: {e}")
-            return Signal("calibration", market.yes_price, 0.2, "NEUTRAL", "error")
 
     def _consensus(self, market: Market) -> Signal:
         kalshi = self._kalshi_price(market.question)
@@ -416,13 +265,10 @@ class SignalEngine:
             return Signal("consensus", market.yes_price, 0.10, "NEUTRAL", "no Kalshi match")
         spread = market.yes_price - kalshi
         if abs(spread) < 0.02:
-            return Signal("consensus", (market.yes_price + kalshi) / 2, 0.65,
-                          "NEUTRAL", f"PM {market.yes_price:.2%} ≈ Kalshi {kalshi:.2%}")
+            return Signal("consensus", (market.yes_price + kalshi) / 2, 0.60, "NEUTRAL", f"PM≈Kalshi {spread:+.1%}")
         if spread > 0:
-            return Signal("consensus", kalshi, min(0.88, abs(spread)*8), "NO",
-                          f"PM {market.yes_price:.2%} > Kalshi {kalshi:.2%} overpriced by {spread:.1%}")
-        return Signal("consensus", kalshi, min(0.88, abs(spread)*8), "YES",
-                      f"Kalshi {kalshi:.2%} > PM {market.yes_price:.2%} underpriced by {abs(spread):.1%}")
+            return Signal("consensus", kalshi, min(0.90, abs(spread) * 9), "NO", f"PM rich vs Kalshi by {spread:.1%}")
+        return Signal("consensus", kalshi, min(0.90, abs(spread) * 9), "YES", f"PM cheap vs Kalshi by {abs(spread):.1%}")
 
     def _predictit(self, market: Market) -> Signal:
         try:
@@ -431,200 +277,201 @@ class SignalEngine:
             if result is None:
                 return Signal("predictit", market.yes_price, 0.10, "NEUTRAL", "no PredictIt match")
             if result["signal"] == "NEUTRAL":
-                return Signal("predictit", result["pi_price"], 0.45, "NEUTRAL", result["reasoning"])
+                return Signal("predictit", result["pi_price"], 0.35, "NEUTRAL", result["reasoning"])
             conf = min(0.85, abs(result["gap"]) * 8)
             return Signal("predictit", result["pi_price"], conf, result["signal"], result["reasoning"])
         except Exception as e:
-            log.debug(f"PredictIt: {e}")
+            log.debug(f"PredictIt error: {e}")
             return Signal("predictit", market.yes_price, 0.10, "NEUTRAL", "error")
 
-    def _base_rate(self, market: Market, ctx: str) -> Signal:
-        """
-        НОВОЕ: используем description для правил резолюции.
-        """
+    def _ai_guard(self, market: Market) -> Optional[Signal]:
+        if cfg.ai_mode == "off" or not self.ai or self._ai_budget_remaining <= 0:
+            return None
+        snapshot = _build_market_snapshot(market, self.intel)
         prompt = (
-            f"{ctx}\n\n"
-            f"TASK: What is the probability from FIRST PRINCIPLES?\n"
-            f"Consider: what would a careful, unbiased analyst estimate BEFORE seeing market prices?\n"
-            f"Focus on: resolution criteria, current state of affairs, likely trajectory.\n"
-            f"IGNORE the current market price of {market.yes_price:.1%} completely.\n\n"
-            f'Return ONLY JSON: {{"probability":0.0,"reasoning":"one sentence max 100 chars"}}'
+            f"{snapshot}\n\n"
+            "Decide if this market is TRADEABLE at all.\n"
+            "Focus only on: resolution ambiguity, obvious missing context, and whether the current market price looks clearly wrong.\n"
+            "Do NOT invent precise certainty.\n"
+            'Return ONLY JSON: {"tradable":true,"probability":0.0,"confidence":"low|medium|high","risk_flag":"none|ambiguous_rules|missing_context|news_unclear","reasoning":"max 80 chars"}'
         )
         try:
-            resp  = self._raw_ai_call(prompt, max_tokens=150, model=_MODEL_FAST)
-            data  = _parse_ai_json(resp)
-            prob  = float(data["probability"])
-            diff  = prob - market.yes_price
-            direc = "YES" if diff > 0.04 else "NO" if diff < -0.04 else "NEUTRAL"
-            return Signal("base_rate", prob, 0.50, direc, data.get("reasoning", ""))
+            resp = self._raw_ai_call(prompt, max_tokens=120, model=_MODEL_FAST)
+            data = _parse_ai_json(resp)
+            tradable = bool(data.get("tradable", False))
+            prob = float(data.get("probability", market.yes_price))
+            conf = {"low": 0.30, "medium": 0.55, "high": 0.72}.get(data.get("confidence", "low"), 0.30)
+            risk_flag = data.get("risk_flag", "none")
+            reasoning = data.get("reasoning", "") or risk_flag
+            diff = prob - market.yes_price
+            if not tradable or risk_flag in {"ambiguous_rules", "missing_context"}:
+                return Signal("ai_guard", market.yes_price, 0.80, "NEUTRAL", f"AI veto: {risk_flag}")
+            direction = "YES" if diff > 0.04 else "NO" if diff < -0.04 else "NEUTRAL"
+            return Signal("ai_guard", prob, conf, direction, reasoning[:120])
         except Exception as e:
-            log.debug(f"Base rate: {e}")
-            return Signal("base_rate", 0.5, 0.10, "NEUTRAL", "error")
+            log.debug(f"AI guard error: {e}")
+            return None
 
-    def find_correlated_markets(self, markets: list) -> list[tuple]:
-        """
-        НОВОЕ: Cross-market correlation.
-        Ищем пары рынков которые должны двигаться вместе.
-        Если одно отстаёт от другого — арбитражная возможность.
-        
-        Примеры пар:
-        - "Will Trump win?" + "Will Republicans take Senate?"
-        - "Will Fed cut rates?" + "Will Bitcoin exceed $100k?"
-        - "Will Ukraine ceasefire?" + "Will Russia withdraw troops?"
-        """
-        CORR_PAIRS = [
-            # Политика США
-            (["trump", "republican", "gop"], ["senate", "house", "congress"]),
-            # Макро
-            (["fed", "rate cut", "fomc"], ["bitcoin", "btc", "s&p", "nasdaq"]),
-            (["recession", "gdp"], ["unemployment", "jobs"]),
-            # Геополитика
-            (["ceasefire", "peace"], ["troops", "withdrawal", "war end"]),
-            (["iran", "nuclear"], ["oil", "crude", "sanctions"]),
-        ]
+    def _should_call_ai(self, result: EnsembleResult, quality: int, signals: list[Signal]) -> bool:
+        if cfg.ai_mode == "off" or not self.ai or self._ai_budget_remaining <= 0:
+            return False
+        if cfg.ai_mode == "full":
+            return True
+        if quality < cfg.ai_min_quality_for_call:
+            return False
+        if quality >= cfg.ai_high_quality_skip and self._external_support_count(result.direction, signals) >= 1:
+            return False
+        return result.direction != "NEUTRAL" or quality >= cfg.ai_min_quality_for_call + 10
 
-        pairs = []
-        for m1 in markets:
-            for m2 in markets:
-                if m1.id == m2.id:
-                    continue
-                q1 = m1.question.lower()
-                q2 = m2.question.lower()
-                for group1_kws, group2_kws in CORR_PAIRS:
-                    in_g1_m1 = any(kw in q1 for kw in group1_kws)
-                    in_g2_m2 = any(kw in q2 for kw in group2_kws)
-                    in_g2_m1 = any(kw in q1 for kw in group2_kws)
-                    in_g1_m2 = any(kw in q2 for kw in group1_kws)
-                    if (in_g1_m1 and in_g2_m2) or (in_g2_m1 and in_g1_m2):
-                        spread = abs(m1.yes_price - m2.yes_price)
-                        if spread > 0.10:  # значимое расхождение
-                            pairs.append((m1, m2, spread))
-        return pairs
+    def _trade_quality(self, market: Market, result: EnsembleResult, signals: list[Signal], pre_score: float) -> int:
+        score = 0.0
+        score += min(30.0, result.edge * 180.0)
+        score += min(12.0, max(0.0, pre_score) * 12.0)
+        if market.volume_24h >= cfg.min_volume * 2:
+            score += 12.0
+        elif market.volume_24h >= cfg.min_volume:
+            score += 8.0
+        elif market.volume_24h >= cfg.min_volume * 0.5:
+            score += 3.0
+        else:
+            score -= 20.0
+
+        if 0.02 <= market.yes_price <= 0.98:
+            score += 6.0
+        if 0.05 <= market.yes_price <= 0.95:
+            score += 4.0
+        if hasattr(market, "spread") and market.spread <= 0.03:
+            score += 6.0
+
+        ext_support = self._external_support_count(result.direction, signals)
+        if ext_support >= 2:
+            score += 22.0
+        elif ext_support == 1:
+            score += 12.0
+
+        momentum = next((s for s in signals if s.name == "momentum" and s.direction == result.direction), None)
+        if momentum:
+            score += 6.0
+
+        vol = next((s for s in signals if s.name == "volume_spike" and s.confidence >= 0.45), None)
+        if vol:
+            score += 4.0
+
+        if result.direction == "NEUTRAL":
+            score -= 20.0
+
+        return int(max(0, min(100, round(score))))
+
+    def _external_support_count(self, direction: str, signals: list[Signal]) -> int:
+        if direction == "NEUTRAL":
+            return 0
+        return sum(
+            1 for s in signals
+            if s.name in {"consensus", "predictit"} and s.direction == direction and s.confidence >= 0.35
+        )
+
+    def _strategy_type(self, direction: str, signals: list[Signal], ai_used: bool) -> str:
+        if direction != "NEUTRAL" and self._external_support_count(direction, signals) >= 1:
+            return "cross_market_gap"
+        if ai_used:
+            return "ai_assisted"
+        return "market_data"
 
     def _ensemble(self, market: Market, signals: list[Signal]) -> EnsembleResult:
-        NO_DATA = {"no Kalshi match", "no PredictIt match", "error", "insufficient history"}
-        active  = [s for s in signals
-                   if not (s.direction == "NEUTRAL" and s.reasoning in NO_DATA)]
+        no_data = {"no Kalshi match", "no PredictIt match", "error", "insufficient history", "no anomaly"}
+        active = [s for s in signals if not (s.direction == "NEUTRAL" and s.reasoning in no_data)]
         if not active:
             active = signals
 
-        # Volume spike — если есть, повышаем уверенность доминирующего направления
-        vol_signal = next((s for s in active if s.name == "volume_spike"), None)
-        vol_boost  = 0.10 if vol_signal and vol_signal.confidence > 0.5 else 0.0
+        total_w = sum(max(0.01, s.weight) * max(0.05, s.confidence) for s in active)
+        if total_w <= 0:
+            return EnsembleResult(0.5, "NEUTRAL", 0.0, 0.5, "low", signals)
 
-        total_w = sum(s.weight * s.confidence for s in active)
-        if total_w == 0:
-            return EnsembleResult(0.5, "NEUTRAL", 0, 0.5, "low", signals)
-
-        prob = sum(s.score * s.weight * s.confidence for s in active) / total_w
+        prob = sum(s.score * max(0.01, s.weight) * max(0.05, s.confidence) for s in active) / total_w
         edge = abs(prob - market.yes_price)
+        yes_w = sum(s.weight * s.confidence for s in active if s.direction == "YES")
+        no_w = sum(s.weight * s.confidence for s in active if s.direction == "NO")
 
-        yes_weighted = sum(s.weight * s.confidence for s in active if s.direction == "YES")
-        no_weighted  = sum(s.weight * s.confidence for s in active if s.direction == "NO")
-        vote_margin  = abs(yes_weighted - no_weighted) / max(total_w, 0.01)
-
-        if prob > market.yes_price + 0.02 and yes_weighted > no_weighted:
+        if prob > market.yes_price + 0.02 and yes_w > no_w:
             direction = "YES"
-        elif prob < market.yes_price - 0.02 and no_weighted > yes_weighted:
+        elif prob < market.yes_price - 0.02 and no_w > yes_w:
             direction = "NO"
         else:
             direction = "NEUTRAL"
 
-        yes_v     = sum(1 for s in active if s.direction == "YES")
-        no_v      = sum(1 for s in active if s.direction == "NO")
-        agreement = max(yes_v, no_v) / len(active)
-        avg_conf  = sum(s.confidence for s in active) / len(active)
+        external_support = self._external_support_count(direction, active)
+        non_ai_support = [s for s in active if s.name in _NON_AI_SIGNAL_NAMES and s.direction == direction]
+        ai_only = direction != "NEUTRAL" and not non_ai_support
+        if ai_only:
+            return EnsembleResult(round(prob, 4), "NEUTRAL", round(edge, 4), round(prob, 4), "low", signals, "ai-only setup")
 
-        # Confidence с volume boost
-        if edge >= 0.20 and direction != "NEUTRAL":
+        avg_conf = sum(s.confidence for s in active) / max(len(active), 1)
+        vote_margin = abs(yes_w - no_w) / max(total_w, 0.01)
+        if edge >= 0.12 and external_support >= 1 and vote_margin > 0.20:
             conf = "high"
-        elif avg_conf > 0.50 and agreement >= 0.55 and edge > 0.05 and vote_margin > 0.2:
-            conf = "high"
-        elif avg_conf > 0.28 and agreement >= 0.35 and edge > 0.02:
+        elif edge >= 0.05 and (external_support >= 1 or avg_conf >= 0.45):
             conf = "medium"
         else:
             conf = "low"
 
-        # Volume spike повышает уверенность на одну ступень если подтверждает
-        if vol_boost > 0 and conf == "medium":
-            conf = "high"
-        elif vol_boost > 0 and conf == "low":
-            conf = "medium"
-
-        top3 = sorted(active, key=lambda s: s.confidence * s.weight, reverse=True)[:3]
+        top3 = sorted(active, key=lambda s: s.confidence * max(0.01, s.weight), reverse=True)[:3]
         reasoning = " · ".join(
-            f"[{s.name}] {s.reasoning[:80]}"
+            f"[{s.name}] {s.reasoning[:70]}"
             for s in top3
-            if s.reasoning and s.reasoning not in NO_DATA
+            if s.reasoning and s.reasoning not in no_data
         )
 
         return EnsembleResult(
-            final_score    = round(prob, 4),
-            direction      = direction,
-            edge           = round(edge, 4),
-            ai_probability = round(prob, 4),
-            confidence     = conf,
-            signals        = signals,
-            reasoning      = reasoning,
+            final_score=round(prob, 4),
+            direction=direction,
+            edge=round(edge, 4),
+            ai_probability=round(prob, 4),
+            confidence=conf,
+            signals=signals,
+            reasoning=reasoning,
         )
 
     def update_weights(self, performance: dict) -> None:
         total = sum(max(0.01, v) for v in performance.values())
         for name, acc in performance.items():
             if name in self.weights:
-                self.weights[name] = round(max(0.05, acc / total), 3)
-        log.info(f"Веса обновлены: {self.weights}")
+                self.weights[name] = round(max(0.03, acc / total), 3)
 
-    def _raw_ai_call(self, prompt: str, max_tokens: int = 150,
-                     model: str = _MODEL_SMART, retries: int = 2) -> str:
-        for attempt in range(retries + 1):
-            try:
-                resp = self.ai.messages.create(
-                    model=model, max_tokens=max_tokens,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return resp.content[0].text
-            except Exception as e:
-                err_str = str(e).lower()
-                if "rate_limit" in err_str or "overload" in err_str:
-                    wait = 2 ** attempt
-                    log.warning(f"Rate limit, waiting {wait}s")
-                    time.sleep(wait)
-                    continue
-                raise
-        raise RuntimeError("AI call failed after retries")
-
-    def _ai_call(self, name: str, prompt: str, fallback: float,
-                 model: str = _MODEL_SMART, max_tokens: int = 150) -> Signal:
-        try:
-            text  = self._raw_ai_call(prompt, max_tokens=max_tokens, model=model)
-            data  = _parse_ai_json(text)
-            prob  = float(data.get("probability", data.get("base_rate", 0.5)))
-            conf  = {"low": 0.30, "medium": 0.60, "high": 0.85}.get(
-                data.get("confidence", "medium"), 0.5)
-            diff  = prob - fallback
-            direc = "YES" if diff > 0.03 else "NO" if diff < -0.03 else "NEUTRAL"
-            return Signal(name, prob, conf, direc, data.get("reasoning", ""))
-        except Exception as e:
-            log.debug(f"{name} AI error: {e}")
-            return Signal(name, 0.5, 0.10, "NEUTRAL", "error")
+    def _raw_ai_call(self, prompt: str, *, max_tokens: int = 150, model: str = _MODEL_FAST) -> str:
+        if not self.ai:
+            raise RuntimeError("AI disabled")
+        msg = self.ai.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text.strip()
 
     def _kalshi_price(self, question: str) -> Optional[float]:
         try:
-            words = [w for w in question.lower().split() if len(w) > 3][:4]
-            r = _S.get(
-                "https://trading-api.kalshi.com/trade-api/v2/markets",
-                params={"status": "open", "limit": 20, "search": " ".join(words)},
-                timeout=5,
-            )
+            r = _S.get("https://trading-api.kalshi.com/trade-api/v2/markets", timeout=5)
             if r.status_code != 200:
                 return None
-            for m in r.json().get("markets", []):
-                title = m.get("title", "").lower()
-                if sum(1 for w in words if w in title) >= 2:
-                    p = m.get("yes_ask") or m.get("last_price")
-                    if p:
-                        return float(p) / 100
-        except Exception:
-            pass
-        return None
+            data = r.json().get("markets", [])
+            q_words = [w for w in question.lower().split() if len(w) > 3][:6]
+            best = None
+            best_score = 0
+            for m in data[:500]:
+                title = (m.get("title") or "").lower()
+                score = sum(1 for w in q_words if w in title)
+                if score > best_score:
+                    best_score = score
+                    best = m
+            if not best or best_score < 2:
+                return None
+            yes_bid = best.get("yes_bid")
+            yes_ask = best.get("yes_ask")
+            if yes_bid is None and yes_ask is None:
+                return None
+            vals = [v / 100 for v in [yes_bid, yes_ask] if isinstance(v, (int, float))]
+            if not vals:
+                return None
+            return sum(vals) / len(vals)
+        except Exception as e:
+            log.debug(f"Kalshi fetch error: {e}")
+            return None

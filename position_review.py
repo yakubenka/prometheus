@@ -191,6 +191,13 @@ def _ai_review(pos, current_price: float, trigger: str,
         return ReviewDecision("HOLD", "no AI client", 0.5, 0.0, 0.0, trigger,
                               current_price, 0.0)
 
+    # Экономим AI: не дёргаем модель на слабых технических триггерах.
+    upnl_preview = _calc_unrealised_pnl(pos, current_price)
+    if trigger.startswith("price_up_") and upnl_preview < 3.0:
+        return ReviewDecision("HOLD", "small gain, no AI review", 0.5, 0.0, 0.0, trigger, current_price, upnl_preview)
+    if trigger.startswith("price_down_") and abs(upnl_preview) < 2.0:
+        return ReviewDecision("HOLD", "small drawdown, no AI review", 0.5, 0.0, 0.0, trigger, current_price, upnl_preview)
+
     # Собираем контекст
     entry         = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
     cur           = current_price   if pos.direction == "YES" else 1.0 - current_price
@@ -418,70 +425,73 @@ class PositionReviewer:
 
         return actions
 
-    def _close_position(self, pos, current_price: float,
-                        reason: str) -> bool:
+    def _close_position(self, pos, current_price: float, reason: str) -> bool:
         """
-        Закрыть позицию:
-        1. Реально продаём токены на Polymarket
-        2. Только если продажа прошла — закрываем в базе
+        Закрыть позицию безопасно:
+        1. Пытаемся реально продать токены
+        2. Проверяем факт закрытия на Polymarket
+        3. Только потом закрываем в локальном состоянии
+        4. Если подтверждения нет — ставим в очередь повторного закрытия
         """
         import os as _os
         upnl = _calc_unrealised_pnl(pos, current_price)
-        
-        # Пытаемся реально продать на Polymarket
         poly_key = _os.environ.get("POLYMARKET_PRIVATE_KEY", "")
-        if pos.token_id and poly_key:
-            try:
-                from resolver import sell_position_on_polymarket
-                shares = pos.size_usd / max(pos.entry_price, 0.001)
-                sold, actual_price = sell_position_on_polymarket(
-                    token_id = pos.token_id,
-                    shares   = shares,
-                    poly_key = poly_key,
-                )
-                if not sold:
-                    log.warning(
-                        f"⚠️ {reason}: продажа на Polymarket не прошла — "
-                        f"позиция НЕ закрыта в базе: {pos.question[:40]}"
-                    )
-                    return False
-                
-                # Проверяем что позиция реально закрылась на Polymarket
-                funder = _os.environ.get("POLYMARKET_FUNDER", "")
-                try:
-                    from resolver import verify_position_closed
-                    confirmed = verify_position_closed(
-                        token_id  = pos.token_id,
-                        funder    = funder,
-                        retries   = 3,
-                        wait_sec  = 10,
-                    )
-                    if not confirmed:
-                        log.warning(
-                            f"⚠️ {reason}: продажа отправлена но позиция "
-                            f"ещё видна на Polymarket — попробуем позже: {pos.question[:40]}"
-                        )
-                        return False
-                except Exception as ve:
-                    log.debug(f"verify error: {ve}")
-                    # Если не можем проверить — доверяем результату продажи
-                
-                # Используем реальную цену продажи
-                current_price = actual_price if actual_price > 0 else current_price
-                upnl = _calc_unrealised_pnl(pos, current_price)
-            except Exception as e:
-                log.error(f"sell_position error: {e}")
-                return False
-        else:
-            log.warning(f"⚠️ {reason}: нет token_id или private_key — закрываем только в базе")
+        funder = _os.environ.get("POLYMARKET_FUNDER", "")
 
-        closed = self.risk.close_with_pnl(
-            pos.market_id,
-            exit_price = current_price,
-            pnl        = upnl,
+        if cfg.dry_run:
+            closed = self.risk.close_with_pnl(pos.market_id, exit_price=current_price, pnl=upnl)
+            return bool(closed)
+
+        if not pos.token_id or not poly_key or not funder:
+            log.warning(f"Review close blocked — нет token/key/funder: {pos.question[:50]}")
+            self.risk.register_pending_close(
+                pos=pos,
+                reason=reason,
+                max_attempts=cfg.max_order_retries,
+                interval_sec=cfg.close_retry_interval_sec,
+                target_price=current_price,
+                last_error="missing_token_or_keys",
+            )
+            return False
+
+        shares = calc_position_shares(pos)
+        sold, actual_price = sell_position_on_polymarket(
+            token_id=pos.token_id,
+            shares=shares,
+            poly_key=poly_key,
         )
+        if not sold:
+            self.risk.register_pending_close(
+                pos=pos,
+                reason=reason,
+                max_attempts=cfg.max_order_retries,
+                interval_sec=cfg.close_retry_interval_sec,
+                target_price=current_price,
+                last_error="sell_failed",
+            )
+            return False
+
+        confirmed = verify_position_closed(
+            token_id=pos.token_id,
+            funder=funder,
+            retries=3,
+            wait_sec=10,
+        )
+        if not confirmed:
+            self.risk.register_pending_close(
+                pos=pos,
+                reason=reason,
+                max_attempts=cfg.max_order_retries,
+                interval_sec=cfg.close_retry_interval_sec,
+                target_price=actual_price or current_price,
+                last_error="not_confirmed",
+            )
+            return False
+
+        exit_price = actual_price or current_price
+        closed = self.risk.close_with_pnl(pos.market_id, exit_price=exit_price, pnl=upnl)
         if closed:
-            log.info(f"  ✅ Closed ({reason}): {pos.question[:50]} | P&L ${upnl:+.2f}")
+            log.info(f"✅ Review close confirmed on Polymarket: {pos.question[:50]} | {reason}")
             return True
         return False
 
