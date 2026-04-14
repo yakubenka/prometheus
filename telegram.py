@@ -142,7 +142,15 @@ class Telegram:
         self.send(f"🎯 *АРБИТРАЖ*\n{'─'*28}\n\n{title}\n_{content}_")
 
     def breaking(self, items: list[str]) -> None:
-        return
+        lines = [
+            "🚨 *BREAKING NEWS*",
+            f"{'─'*28}",
+            "_Запускаю внеочередной анализ рынков..._",
+            ""
+        ]
+        for i, item in enumerate(items[:3], 1):
+            lines.append(f"{i}. {item[:100]}")
+        self.send("\n".join(lines))
 
     def limit_warning(self, pct: float) -> None:
         self.send(f"⚠️ Дневной лимит потерь: *{pct:.0%}* использовано")
