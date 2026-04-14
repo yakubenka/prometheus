@@ -1120,5 +1120,25 @@ class Prometheus:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Prometheus trading bot")
+    parser.add_argument(
+        "--backtest",
+        type=int,
+        nargs="?",
+        const=100,
+        metavar="N",
+        help="Запустить backtest на N закрытых рынках (по умолчанию 100)",
+    )
+    args = parser.parse_args()
+
     _logger.setup(logs_dir=cfg.logs_dir)
-    Prometheus().run()
+
+    if args.backtest is not None:
+        from backtest import Backtester
+        log.info(f"Запуск backtest на {args.backtest} рынках...")
+        bt     = Backtester(Anthropic(api_key=cfg.anthropic_key))
+        result = bt.run(n_markets=args.backtest)
+        print(result.summary())
+    else:
+        Prometheus().run()
