@@ -8,3 +8,4 @@ pydantic>=2.0.0
 pytrends>=4.9.0
 psycopg2-binary>=2.9.0
 # v4 cache bust
+web3>=7.0.0

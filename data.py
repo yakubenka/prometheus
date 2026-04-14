@@ -62,14 +62,25 @@ class Market:
 
     @property
     def polymarket_url(self) -> str:
-        """Ссылка на рынок на Polymarket."""
+        """
+        Ссылка на рынок Polymarket.
+
+        Polymarket URL структура:
+        - /event/{eventSlug}  — страница события. НО: Gamma API возвращает
+          marketSlug который отличается от eventSlug → часто 404.
+        - /?s={query}         — поиск. НИКОГДА не даёт 404, всегда находит рынок.
+
+        Используем поиск по полному названию вопроса — это надёжнее.
+        Если slug есть — пробуем /event/ первым, но это не гарантия.
+        """
         import urllib.parse
+        # Поиск по полному вопросу — никогда не 404
+        q = urllib.parse.quote(self.question[:100])
+        search_url = f"https://polymarket.com/?s={q}"
+        # Если есть slug — используем /event/ (может дать 404, но чаще работает)
         if self.slug:
             return f"https://polymarket.com/event/{self.slug}"
-        # Поиск по первым 4-5 словам вопроса
-        words = ' '.join(self.question.split()[:5])
-        q = urllib.parse.quote(words)
-        return f"https://polymarket.com/markets?_s={q}"
+        return search_url
 
     @staticmethod
     def _make_slug(question: str) -> str:
@@ -273,6 +284,17 @@ def _parse_market(m: dict) -> Optional[Market]:
         text = (m.get("question") or "") + " " + (m.get("description") or "")
         tags = _extract_tags(text.lower())
 
+        # Собираем все возможные slug поля из Gamma API
+        # groupSlug — slug родительского события (наиболее точный для /event/)
+        # marketSlug — slug самого рынка
+        # slug — общее поле
+        slug = (
+            m.get("groupSlug") or
+            m.get("marketSlug") or
+            m.get("slug") or
+            None
+        )
+
         return Market(
             id           = str(m.get("id") or m.get("conditionId") or ""),
             question     = str(m.get("question") or m.get("title") or ""),
@@ -284,7 +306,7 @@ def _parse_market(m: dict) -> Optional[Market]:
             token_id_no  = token_no,
             description  = str(m.get("description") or "")[:500],
             tags         = tags,
-            slug         = m.get("slug") or m.get("marketSlug") or None,
+            slug         = slug,
         )
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
         log.debug(f"Ошибка парсинга рынка: {e}")

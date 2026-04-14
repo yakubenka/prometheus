@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
+import time
 from anthropic import Anthropic
 
 from data import fetch_closed_markets, Market
@@ -147,7 +148,7 @@ class Backtester:
             ))
 
             # Небольшая пауза чтобы не спамить API
-            import time; time.sleep(0.5)
+            time.sleep(0.5)
 
         return self._calc_results(trades)
 
@@ -166,7 +167,7 @@ Return ONLY JSON:
 
         try:
             resp = self.ai.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=80,
                 messages=[{"role":"user","content":prompt}],
             )

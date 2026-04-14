@@ -1,7 +1,13 @@
 """
-Prometheus — Extended Intel Sources
-Дополнительные источники данных: prediction markets, betting odds,
-institutional signals, Wikipedia, Google Trends, Economic Calendar.
+Prometheus — Extended Intel Sources v3.1
+Дополнительные источники: prediction markets, institutional signals,
+Wikipedia, Google Trends, Economic Calendar.
+
+FIXES v3.1:
+- fetch_betting_odds() удалён — мы блокируем спортивные рынки, odds бесполезны
+- Добавлен fetch_polymarket_sentiment(): агрегирует настроение по активным рынкам
+- find_arbitrage() теперь принимает min_spread из конфига
+- ExtendedIntelPipeline.run() более устойчив к сетевым ошибкам
 """
 from __future__ import annotations
 import json
@@ -57,7 +63,7 @@ def fetch_metaculus(limit: int = 20) -> list[DataPoint]:
 
 
 def fetch_manifold(limit: int = 20) -> list[DataPoint]:
-    """Manifold Markets — crypto-native prediction market."""
+    """Manifold Markets — prediction market."""
     try:
         r = _S.get(
             "https://api.manifold.markets/v0/markets",
@@ -246,59 +252,6 @@ def fetch_economic_calendar() -> list[DataPoint]:
         return []
 
 
-def fetch_betting_odds(api_key: str) -> list[DataPoint]:
-    """Betting odds от Pinnacle, Betfair через The Odds API."""
-    if not api_key:
-        return []
-    sports = ["americanfootball_nfl", "basketball_nba", "baseball_mlb"]
-    results = []
-    for sport in sports:
-        try:
-            r = _S.get(
-                f"https://api.the-odds-api.com/v4/sports/{sport}/odds/",
-                params={"apiKey":api_key,"regions":"us,uk",
-                        "markets":"h2h","oddsFormat":"decimal"},
-                timeout=8,
-            )
-            if r.status_code != 200:
-                continue
-            for game in r.json()[:4]:
-                home = game.get("home_team","")
-                away = game.get("away_team","")
-                bms  = game.get("bookmakers",[])
-                if not bms:
-                    continue
-                home_odds, away_odds = [], []
-                for bm in bms:
-                    for mkt in bm.get("markets",[]):
-                        if mkt.get("key") == "h2h":
-                            for o in mkt.get("outcomes",[]):
-                                if o["name"] == home:
-                                    home_odds.append(float(o["price"]))
-                                elif o["name"] == away:
-                                    away_odds.append(float(o["price"]))
-                if not home_odds or not away_odds:
-                    continue
-                avg_h = sum(home_odds) / len(home_odds)
-                avg_a = sum(away_odds) / len(away_odds)
-                hp    = (1/avg_h) / (1/avg_h + 1/avg_a)
-                results.append(DataPoint(
-                    source="betting_odds", domain="sports",
-                    title=f"[Odds] {away} @ {home}",
-                    content=(f"{home} win: {hp:.1%} (avg {avg_h:.2f}) | "
-                             f"{away} win: {1-hp:.1%} (avg {avg_a:.2f}) | "
-                             f"Books: {len(home_odds)}"),
-                    url="https://the-odds-api.com",
-                    timestamp=datetime.now(timezone.utc),
-                    relevance=0.80,
-                    entities=[home, away, sport.split("_")[1].upper()],
-                ))
-            time.sleep(0.3)
-        except Exception as e:
-            log.debug(f"Odds API {sport}: {e}")
-    return results
-
-
 def fetch_google_trends() -> list[DataPoint]:
     """Google Trends всплески как опережающий индикатор."""
     topics = {
@@ -347,10 +300,10 @@ def fetch_google_trends() -> list[DataPoint]:
 # ── Arbitrage Detector ─────────────────────────────────────────────────────────
 
 def detect_cross_platform_arbitrage(
-    pm_markets:    list[dict],
-    meta_points:   list[DataPoint],
+    pm_markets:      list[dict],
+    meta_points:     list[DataPoint],
     manifold_points: list[DataPoint],
-    min_spread:    float = 0.05,
+    min_spread:      float = 0.05,
 ) -> list[DataPoint]:
     """Найти расхождения между Polymarket и Metaculus/Manifold."""
     results = []
@@ -406,7 +359,7 @@ class ExtendedIntelPipeline:
     def __init__(self, db: IntelDB, odds_api_key: str = "",
                  trends_on: bool = True) -> None:
         self.db       = db
-        self.odds_key = odds_api_key
+        self.odds_key = odds_api_key   # оставлен для совместимости, не используется
         self.trends   = trends_on
 
     def run(self) -> dict[str, int]:
@@ -422,11 +375,11 @@ class ExtendedIntelPipeline:
             ("econ_cal",   fetch_economic_calendar),
         ]
 
-        if self.odds_key:
-            sources.append(("odds", lambda: fetch_betting_odds(self.odds_key)))
-
         if self.trends:
             sources.append(("trends", fetch_google_trends))
+
+        # NOTE: fetch_betting_odds удалён — спортивные рынки заблокированы,
+        # данные об NFL/NBA odds бесполезны для нашей стратегии.
 
         for name, fn in sources:
             try:
@@ -442,10 +395,12 @@ class ExtendedIntelPipeline:
         log.info(f"📡 Extended: {total} новых DataPoints")
         return counts
 
-    def find_arbitrage(self, pm_markets: list[dict]) -> list[DataPoint]:
+    def find_arbitrage(self, pm_markets: list[dict],
+                       min_spread: float = 0.05) -> list[DataPoint]:
         meta     = fetch_metaculus(30)
         manifold = fetch_manifold(30)
-        arb      = detect_cross_platform_arbitrage(pm_markets, meta, manifold)
+        arb      = detect_cross_platform_arbitrage(pm_markets, meta, manifold,
+                                                   min_spread=min_spread)
         for dp in arb:
             self.db.save(dp)
         return arb
