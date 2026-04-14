@@ -285,6 +285,7 @@ def portfolio_kelly_size(
     5. Применяем корреляционный штраф если похожие позиции уже открыты
     """
     # Базовый Kelly
+    ai_probability = max(0.01, min(0.99, ai_probability))
     p     = ai_probability if direction == "YES" else 1.0 - ai_probability
     price = market_price   if direction == "YES" else 1.0 - market_price
     price = max(price, 0.01)

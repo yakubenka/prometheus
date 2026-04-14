@@ -105,7 +105,8 @@ def db_last_push():
         row = cur.fetchone()
         cur.close(); conn.close()
         return row[0] if row else None
-    except:
+    except Exception as e:
+        print(f"DB last_push error: {e}")
         return None
 
 init_db()
@@ -150,7 +151,8 @@ def _alive() -> bool:
         if not t.tzinfo:
             t = t.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - t).total_seconds() < 1800
-    except:
+    except Exception as e:
+        print(f"_alive() error: {e}")
         return False
 
 # ── Push ───────────────────────────────────────────────────────────────────────
@@ -185,7 +187,7 @@ def health():
         "bot_alive": _alive(),
         "last_push": t.isoformat() if hasattr(t, "isoformat") else t,
         "db": "postgres" if DATABASE_URL else "memory",
-        "ts": datetime.utcnow().isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
     }
 
 @app.get("/api/debug/telegram")
