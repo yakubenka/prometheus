@@ -8,6 +8,7 @@ import os
 import signal as _signal
 import time
 from datetime import datetime, date, timezone
+from pathlib import Path
 from anthropic import Anthropic
 
 import logger as _logger
@@ -29,6 +30,43 @@ from strategy_control import StrategyControl
 
 import logging
 log = logging.getLogger("prometheus.main")
+
+
+# ── Dead-letter queue ──────────────────────────────────────────────────────────
+
+def _dead_letter(
+    market_id: str,
+    question:  str,
+    direction: str,
+    size_usd:  float,
+    price:     float,
+    error:     str = "",
+) -> None:
+    """
+    Фиксирует упавший ордер в dead_letter.jsonl для аудита и ручного восстановления.
+    Вызывается когда _execute() вернул False в live-режиме.
+    Файл доступен через Railway Volumes / docker mount — оператор видит все потери.
+    """
+    entry = {
+        "ts":        datetime.now(timezone.utc).isoformat(),
+        "market_id": market_id,
+        "question":  question[:120],
+        "direction": direction,
+        "size_usd":  size_usd,
+        "price":     price,
+        "error":     error[:200],
+    }
+    try:
+        path = Path(cfg.logs_dir) / "dead_letter.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        log.error(f"Dead letter write failed: {e}")
+    log.warning(
+        f"💀 Dead letter: {direction} ${size_usd:.2f} @ {price:.3f} "
+        f"| {question[:60]} | err={error[:60]}"
+    )
 
 
 # ── Execution ──────────────────────────────────────────────────────────────────
@@ -588,6 +626,16 @@ class Prometheus:
                     reasoning    = sig.reasoning,
                     url          = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
                 )
+            elif not cfg.dry_run:
+                _dead_letter(
+                    market_id = sig.market_id,
+                    question  = sig.question,
+                    direction = sig.direction,
+                    size_usd  = decision.size_usd,
+                    price     = sig.entry_price,
+                    error     = "execute_failed_smart_money",
+                )
+                self.tg.error(f"Ордер упал (smart money): {sig.question[:60]}")
 
         # 2. Двухэтапный анализ рынков
         # Этап 1: быстрый скрининг 50 рынков без AI
@@ -783,6 +831,16 @@ class Prometheus:
                         s["traded"] = True
                         s["size"]   = decision.size_usd
                         break
+            elif not cfg.dry_run:
+                _dead_letter(
+                    market_id = market.id,
+                    question  = market.question,
+                    direction = result.direction,
+                    size_usd  = decision.size_usd,
+                    price     = price,
+                    error     = "execute_failed",
+                )
+                self.tg.error(f"Ордер упал: {market.question[:60]}")
 
             time.sleep(1.5)
 
