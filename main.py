@@ -142,6 +142,17 @@ class Prometheus:
                 self._check_risk_alerts()
                 self._trade_cycle()
 
+                # Breaking news триггер — проверяем каждый цикл
+                # Если есть горячая новость и прошло >3 мин с последнего breaking цикла
+                import time as _time
+                breaking = self.intel.breaking_news(hours=0.1)  # последние 6 минут
+                if breaking and (_time.time() - self._last_breaking) > 180:
+                    log.info(f"🚨 Breaking news detected! Triggering immediate cycle...")
+                    self.tg.breaking([dp.title for dp in breaking[:3]])
+                    self._resolve_positions()
+                    self._trade_cycle()
+                    self._last_breaking = _time.time()
+
                 self._sleep(cfg.scan_interval)
 
             except Exception as e:
@@ -375,42 +386,10 @@ class Prometheus:
         self.tg.cycle_summary(ai_trades, sm_trades, snap["daily_pnl"])
         self._push_to_api()
 
-
-    def _estimate_live_cash(self, snap: dict) -> float:
-        """
-        Conservative live cash estimate.
-        Priority:
-        1) explicit env override POLYMARKET_CASH_USD, if user wants to pin it
-        2) bankroll + realized pnl - current open exposure
-        """
-        try:
-            forced = os.environ.get("POLYMARKET_CASH_USD", "").strip()
-            if forced:
-                return max(0.0, float(forced))
-        except Exception:
-            pass
-        try:
-            bankroll = float(cfg.bankroll)
-            total_pnl = float(snap.get("total_pnl", 0.0))
-            open_exposure = float(snap.get("open_exposure", 0.0))
-            return max(0.0, round(bankroll + total_pnl - open_exposure, 2))
-        except Exception:
-            return max(0.0, float(getattr(cfg, "bankroll", 100.0)))
-
-    def _estimate_equity(self, cash_usd: float, open_positions: list[dict]) -> float:
-        try:
-            open_value = sum(max(0.0, float(p.get("size", 0.0)) + float(p.get("pnl", 0.0))) for p in open_positions)
-            return round(float(cash_usd) + open_value, 2)
-        except Exception:
-            return round(float(cash_usd), 2)
-
     def _push_to_api(self) -> None:
         """Отправить актуальные данные в API сервис."""
-        api_url = (os.environ.get("API_PUSH_URL", "") or "").strip().rstrip("/")
-        if api_url.endswith("/internal/push"):
-            api_url = api_url[:-len("/internal/push")]
+        api_url = os.environ.get("API_PUSH_URL", "")
         if not api_url:
-            log.warning("API_PUSH_URL пустой — push в dashboard пропущен")
             return
         try:
             import requests as _r
@@ -479,9 +458,7 @@ class Prometheus:
             all_closed_fmt   = [fmt(p, fetch_price=False) for p in all_closed[-100:]]
 
             # Суммарный unrealised P&L
-            total_upnl = round(sum(p["pnl"] for p in open_formatted), 2)
-            cash_usd = self._estimate_live_cash(snap)
-            equity_usd = self._estimate_equity(cash_usd, open_formatted)
+            total_upnl = sum(p["pnl"] for p in open_formatted)
 
             # Smart money leaderboard
             sm_traders = []
@@ -517,8 +494,6 @@ class Prometheus:
                     "open_positions":    snap["open_positions"],
                     "open_exposure":     snap["open_exposure"],
                     "bankroll":          cfg.bankroll,
-                    "cash_usd":          cash_usd,
-                    "equity_usd":        equity_usd,
                     "daily_loss_used":   snap["daily_loss_pct"],
                     "signals_today":     self._daily_signals,
                     "smart_money_today": self._daily_sm_alerts,
@@ -542,19 +517,15 @@ class Prometheus:
                 },
             }
 
-            resp = _r.post(
+            _r.post(
                 f"{api_url}/internal/push",
                 json=payload,
                 headers={"x-bot-key": cfg.dashboard_key},
                 timeout=8,
             )
-            resp.raise_for_status()
-            log.info(
-                f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f} | "
-                f"Cash ${cash_usd:.2f} | Equity ${equity_usd:.2f}"
-            )
+            log.info(f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f}")
         except Exception as e:
-            log.warning(f"Push to API failed: {e}")
+            log.debug(f"Push to API failed: {e}")
 
     def _maybe_daily_report(self) -> None:
         now   = datetime.now(timezone.utc)

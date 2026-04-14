@@ -14,37 +14,27 @@ _SESSION.headers["User-Agent"] = "Prometheus/3.0"
 
 class Telegram:
     def __init__(self, token: str, chat_id: str) -> None:
-        self.token = token
+        self.token   = token
         self.chat_id = chat_id
         self.enabled = bool(token and chat_id)
-        self._base = f"https://api.telegram.org/bot{token}"
+        self._base   = f"https://api.telegram.org/bot{token}"
 
     def send(self, text: str, silent: bool = False) -> bool:
-        blocked_markers = (
-            "Wikipedia surge",
-            "🚨 *BREAKING NEWS*",
-            "🚨 Breaking",
-            "\nBreaking\n",
-            "Breaking\n",
-            "Breaking",
-        )
-        if any(marker in text for marker in blocked_markers):
-            return False
         if not self.enabled:
             return False
         try:
             r = _SESSION.post(
                 f"{self._base}/sendMessage",
                 json={
-                    "chat_id": self.chat_id,
-                    "text": text[:4096],
-                    "parse_mode": "Markdown",
+                    "chat_id":              self.chat_id,
+                    "text":                 text[:4096],   # Telegram limit
+                    "parse_mode":           "Markdown",
                     "disable_notification": silent,
                 },
                 timeout=8,
             )
             if r.status_code != 200:
-                log.warning(f"Telegram HTTP {r.status_code}: {r.text[:160]}")
+                log.warning(f"Telegram HTTP {r.status_code}: {r.text[:100]}")
                 return False
             return True
         except requests.exceptions.Timeout:
@@ -53,37 +43,114 @@ class Telegram:
             log.warning(f"Telegram error: {e}")
         return False
 
+    # ── Typed helpers ──────────────────────────────────────────────────────────
+
     def started(self, dry_run: bool) -> None:
-        mode = "🟡 DRY RUN" if dry_run else "🔴 LIVE"
-        self.send(f"🤖 *Prometheus запущен* — {mode}")
+        mode = "📝 DRY RUN" if dry_run else "🔴 LIVE TRADING"
+        self.send(f"🚀 *Prometheus запущен*\nРежим: {mode}")
 
     def stopped(self) -> None:
-        self.send("⛔️ Prometheus остановлен")
+        self.send("⛔ *Prometheus остановлен*")
 
     def error(self, msg: str) -> None:
-        self.send(f"🚨 *Ошибка*\n`{msg[:3500]}`")
+        self.send(f"🚨 *Ошибка*\n```{msg[:300]}```")
 
-    def opened(self, q: str, d: str, p: float, size: float, why: str = "", slug: str | None = None) -> None:
-        url = f"\n🔗 https://polymarket.com/event/{slug}" if slug else ""
-        extra = f"\n_{why[:250]}_" if why else ""
-        self.send(f"✅ *Открыта позиция*\n{q}\n*{d}* @ `{p:.3f}` на `${size:.2f}`{extra}{url}")
+    def trade(self, question: str, direction: str, price: float,
+              size: float, edge: float, confidence: str,
+              reasoning: str, dry_run: bool,
+              signals: list = None) -> None:
 
-    def closed(self, q: str, d: str, pnl: float) -> None:
-        sign = "+" if pnl >= 0 else ""
-        self.send(f"💰 *Позиция закрыта*\n{q}\n*{d}* → `{sign}${pnl:.2f}`")
+        mode = "📋 PAPER" if dry_run else "⚡ LIVE"
+        dir_icon = "🟢 LONG" if direction == "YES" else "🔴 SHORT"
+        conf_icon = {"high": "🔥", "medium": "✅", "low": "⚡"}.get(confidence, "•")
 
-    def review(self, q: str, upnl: float, captured_pct: float, trigger: str, prob: float, reason: str) -> None:
-        sign = "+" if upnl >= 0 else ""
+        # Ожидаемый профит если рынок резолвится в нашу пользу
+        if direction == "YES":
+            expected_win = round(size * (1/max(price, 0.01) - 1), 2)
+        else:
+            expected_win = round(size * (1/max(1-price, 0.01) - 1), 2)
+        expected_loss = size  # максимальная потеря
+
+        lines = [
+            f"{mode} TRADE",
+            f"{'─'*32}",
+            f"",
+            f"*{question}*",
+            f"",
+            f"{dir_icon}  `{price:.3f}`  →  size *${size:.2f}*",
+            f"",
+            f"📊 *Анализ:*",
+            f"  Edge:         *{edge:.1%}*",
+            f"  Уверенность:  {conf_icon} *{confidence.upper()}*",
+            f"  Потенциал:    +${expected_win:.2f} / −${expected_loss:.2f}",
+            f"  R/R:          *1:{round(expected_win/max(expected_loss,0.01), 1)}*",
+        ]
+
+        # Сигналы — только значимые
+        if signals:
+            active = [s for s in signals
+                      if s.direction != "NEUTRAL"
+                      and s.reasoning
+                      and s.reasoning not in ("error", "insufficient history", "no Kalshi match", "no PredictIt match")]
+            if active:
+                lines.append(f"")
+                lines.append(f"🧠 *Почему вошли:*")
+                for s in active[:4]:
+                    arrow = "↑" if s.direction == "YES" else "↓"
+                    conf_pct = f"{s.confidence:.0%}"
+                    lines.append(f"  `{s.name:<12}` {arrow} {s.reasoning[:90]}")
+
+        # Ключевой вывод из reasoning
+        if reasoning:
+            key_parts = [p.strip() for p in reasoning.split("·") if p.strip() and "[" not in p]
+            if key_parts:
+                lines.append(f"")
+                lines.append(f"💡 *Ключевой тезис:*")
+                lines.append(f"  _{key_parts[0][:150]}_")
+
+        lines.append(f"")
+        lines.append(f"{'─'*32}")
+
+        self.send("\n".join(lines))
+
+    def smart_money(self, question: str, direction: str,
+                    price: float, size: float, reasoning: str) -> None:
+        dir_icon = "🟢" if direction == "YES" else "🔴"
         self.send(
-            "🔎 *Обзор — ДЕРЖИ*\n\n"
-            f"{q}\n\n"
-            f"📉 uP&L: *{sign}${upnl:.2f}* | Захвачено: *{captured_pct:.0f}%*\n"
-            f"Триггер: `{trigger}` | Prob: *{prob:.0f}%*\n"
-            f"_{reason[:240]}_"
+            f"🔎 *SMART MONEY SIGNAL*\n"
+            f"{'─'*28}\n\n"
+            f"*{question[:80]}*\n\n"
+            f"{dir_icon} *{direction}* @ `{price:.3f}` | *${size:.2f}*\n\n"
+            f"🧠 _{reasoning[:150]}_"
         )
 
+    def closed(self, question: str, direction: str,
+               outcome: str, pnl: float) -> None:
+        won = pnl >= 0
+        icon = "✅" if won else "❌"
+        result = "WIN" if won else "LOSS"
+        pnl_str = f"+${pnl:.2f}" if won else f"−${abs(pnl):.2f}"
+        self.send(
+            f"{icon} *{result}*\n"
+            f"{'─'*28}\n\n"
+            f"*{question[:80]}*\n\n"
+            f"Ставка: *{direction}* → *{outcome}*\n"
+            f"P&L: *{pnl_str}*"
+        )
+
+    def arbitrage(self, title: str, content: str) -> None:
+        self.send(f"🎯 *АРБИТРАЖ*\n{'─'*28}\n\n{title}\n_{content}_")
+
     def breaking(self, items: list[str]) -> None:
-        return
+        lines = [
+            "🚨 *BREAKING NEWS*",
+            f"{'─'*28}",
+            "_Запускаю внеочередной анализ рынков..._",
+            ""
+        ]
+        for i, item in enumerate(items[:3], 1):
+            lines.append(f"{i}. {item[:100]}")
+        self.send("\n".join(lines))
 
     def limit_warning(self, pct: float) -> None:
         self.send(f"⚠️ Дневной лимит потерь: *{pct:.0%}* использовано")
@@ -94,27 +161,35 @@ class Telegram:
             lines.append(f"  {name}: {w:.0%}")
         self.send("\n".join(lines))
 
-    def cycle_summary(self, ai_trades: int, sm_trades: int, daily_pnl: float) -> None:
-        sign = "+" if daily_pnl >= 0 else ""
-        self.send(
-            f"📊 Цикл завершён\nAI trades: *{ai_trades}*\nSmart-money trades: *{sm_trades}*\nDaily PnL: *{sign}${daily_pnl:.2f}*",
-            silent=True,
-        )
-
-    def arbitrage(self, title: str, content: str) -> None:
-        self.send(f"⚖️ *Арбитраж*\n*{title}*\n{content[:500]}")
-
-    def daily_report(self, snap: dict, by_tag: dict, signals: int, sm_alerts: int) -> None:
+    def daily_report(self, snap: dict, by_tag: dict,
+                     signals: int, sm_alerts: int) -> None:
+        from datetime import date
         lines = [
-            "📅 *Ежедневный отчёт*",
-            f"Total PnL: *${snap.get('total_pnl', 0):.2f}*",
-            f"Daily PnL: *${snap.get('daily_pnl', 0):.2f}*",
-            f"Signals: *{signals}*",
-            f"Smart-money alerts: *{sm_alerts}*",
+            f"📊 *Дневной отчёт* | {date.today()}",
+            "",
+            f"P&L сегодня:  *${snap['daily_pnl']:+.2f}*",
+            f"P&L всего:    *${snap['total_pnl']:+.2f}*",
+            f"Win rate:     {snap['win_rate']:.1%}",
+            f"Trades:       {snap['total_trades']}",
+            f"Open:         {snap['open_positions']}",
+            "",
+            f"Сигналов: {signals} | SM: {sm_alerts}",
         ]
         if by_tag:
-            lines.append("")
-            lines.append("*By tag:*")
-            for tag, val in list(by_tag.items())[:8]:
-                lines.append(f"• {tag}: ${val:.2f}")
+            lines.append("\n*По доменам:*")
+            for tag, s in sorted(by_tag.items(),
+                                  key=lambda x: x[1]["pnl"], reverse=True):
+                if s["trades"] >= 2:
+                    lines.append(
+                        f"  {tag}: WR {s['win_rate']:.0%} "
+                        f"P&L ${s['pnl']:+.1f} ({s['trades']})"
+                    )
         self.send("\n".join(lines))
+
+    def cycle_summary(self, ai: int, sm: int, pnl: float) -> None:
+        self.send(
+            f"🔄 Цикл завершён\n"
+            f"AI сделок: {ai} | SM: {sm}\n"
+            f"P&L сегодня: ${pnl:+.2f}",
+            silent=True,
+        )

@@ -5,7 +5,6 @@ PostgreSQL хранилище. Данные не теряются при деп�
 import json
 import os
 import secrets
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -163,10 +162,9 @@ def overview():
     d = store_get("overview")
     if d:
         d = dict(d); d["bot_running"] = _alive(); return d
-    bankroll = float(os.environ.get("BANKROLL","100"))
     return {"bot_running":_alive(),"dry_run":True,"pnl_today":0,"pnl_total":0,
-            "unrealised_pnl":0,"win_rate":0,"total_trades":0,"open_positions":0,"open_exposure":0,
-            "bankroll":bankroll,"cash_usd": bankroll,"equity_usd": bankroll,"daily_loss_used":0,
+            "win_rate":0,"total_trades":0,"open_positions":0,"open_exposure":0,
+            "bankroll":float(os.environ.get("BANKROLL","100")),"daily_loss_used":0,
             "signals_today":0,"smart_money_today":0}
 
 @app.get("/api/signals")
