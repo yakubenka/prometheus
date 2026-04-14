@@ -148,13 +148,6 @@ class IntelDB:
             ).fetchall()
         return [self._row(r) for r in rows]
 
-    def cleanup(self, days: int = 7) -> int:
-        """Удалить записи старше N дней чтобы не раздувать SQLite."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=days*24)).isoformat()
-        self.conn.execute("DELETE FROM datapoints WHERE ts < ?", (cutoff,))
-        self.conn.execute("VACUUM")
-        return self.conn.execute("SELECT changes()").fetchone()[0]
-
     def stats(self) -> dict[str, int]:
         rows = self.conn.execute(
             "SELECT domain, COUNT(*) FROM datapoints"
