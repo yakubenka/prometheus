@@ -10,7 +10,11 @@ FIXES v3.1:
 """
 import json
 import os
+import re
 import secrets
+import threading
+import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -27,6 +31,56 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# ── Rate Limiter ───────────────────────────────────────────────────────────────
+# Sliding-window in-memory rate limiter (no external dependencies).
+# Периодически очищает старые записи чтобы не расти в памяти.
+
+_rl_store: dict[str, list[float]] = defaultdict(list)
+_rl_lock  = threading.Lock()
+_rl_last_gc: float = 0.0
+_RL_GC_INTERVAL = 120  # очищать словарь раз в 2 минуты
+
+
+def _rate_limited(key: str, limit: int, window: int) -> bool:
+    """
+    Sliding window rate limiter.
+    Возвращает True если лимит превышен (запрос нужно отклонить).
+    key    — обычно IP адрес или имя эндпоинта
+    limit  — макс. кол-во запросов
+    window — окно в секундах
+    """
+    global _rl_last_gc
+    now = time.time()
+    with _rl_lock:
+        # Периодическая сборка мусора: удаляем ключи без активности
+        if now - _rl_last_gc > _RL_GC_INTERVAL:
+            stale = [k for k, ts in _rl_store.items()
+                     if not ts or now - ts[-1] > window * 2]
+            for k in stale:
+                del _rl_store[k]
+            _rl_last_gc = now
+
+        calls = _rl_store[key]
+        # Вытесняем старые метки вне окна
+        _rl_store[key] = [t for t in calls if now - t < window]
+        if len(_rl_store[key]) >= limit:
+            return True
+        _rl_store[key].append(now)
+        return False
+
+
+def _client_ip(request: Request) -> str:
+    """Извлекает реальный IP из заголовков прокси или напрямую."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+_MARKET_ID_RE = re.compile(r'^[0-9a-zA-Z_\-]{1,150}$')
 
 API_KEY      = os.environ.get("DASHBOARD_API_KEY", "")
 MANUAL_CLOSE_KEY = os.environ.get("MANUAL_CLOSE_KEY", "")
@@ -105,7 +159,8 @@ def db_last_push():
         row = cur.fetchone()
         cur.close(); conn.close()
         return row[0] if row else None
-    except:
+    except Exception as e:
+        print(f"DB last_push error: {e}")
         return None
 
 init_db()
@@ -150,7 +205,8 @@ def _alive() -> bool:
         if not t.tzinfo:
             t = t.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - t).total_seconds() < 1800
-    except:
+    except Exception as e:
+        print(f"_alive() error: {e}")
         return False
 
 # ── Push ───────────────────────────────────────────────────────────────────────
@@ -185,7 +241,7 @@ def health():
         "bot_alive": _alive(),
         "last_push": t.isoformat() if hasattr(t, "isoformat") else t,
         "db": "postgres" if DATABASE_URL else "memory",
-        "ts": datetime.utcnow().isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
     }
 
 @app.get("/api/debug/telegram")
@@ -242,7 +298,9 @@ def debug_telegram(_=Depends(_bot_auth)):
         return {"ok": False, "error": str(e)}
 
 @app.get("/api/overview")
-def overview():
+def overview(request: Request):
+    if _rate_limited(_client_ip(request), limit=60, window=60):
+        raise HTTPException(429, "Too many requests")
     d = store_get("overview")
     if d:
         d = dict(d)
@@ -257,7 +315,9 @@ def overview():
     }
 
 @app.get("/api/signals")
-def signals(limit: int = 30):
+def signals(request: Request, limit: int = 30):
+    if _rate_limited(_client_ip(request), limit=60, window=60):
+        raise HTTPException(429, "Too many requests")
     d = store_get("signals")
     if isinstance(d, list):
         return {"signals": d[:limit]}
@@ -266,16 +326,24 @@ def signals(limit: int = 30):
     return {"signals": []}
 
 @app.get("/api/positions")
-def positions():
+def positions(request: Request):
+    if _rate_limited(_client_ip(request), limit=60, window=60):
+        raise HTTPException(429, "Too many requests")
     return store_get("positions") or {"open": [], "closed_today": [], "history": []}
 
 @app.post("/api/close_position")
 async def close_position(request: Request, _=Depends(_manual_close_auth)):
     """Закрыть позицию вручную из дашборда. Корректно обновляет overview P&L."""
+    ip = _client_ip(request)
+    if _rate_limited(f"close:{ip}", limit=10, window=60):
+        raise HTTPException(429, "Too many requests — подождите минуту")
+
     body = await request.json()
-    market_id = body.get("market_id", "")
+    market_id = body.get("market_id", "").strip()
     if not market_id:
         return {"ok": False, "error": "no market_id"}
+    if not _MARKET_ID_RE.match(market_id):
+        return {"ok": False, "error": "invalid market_id format"}
 
     pos_data = store_get("positions") or {"open": [], "closed_today": [], "history": []}
     open_pos = pos_data.get("open", [])

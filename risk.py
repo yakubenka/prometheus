@@ -124,6 +124,7 @@ class RiskManager:
         direction:      str,
         bankroll:       float = 100.0,
     ) -> float:
+        ai_probability = max(0.01, min(0.99, ai_probability))
         p     = ai_probability if direction == "YES" else 1 - ai_probability
         price = market_price   if direction == "YES" else 1 - market_price
         price = max(price, 0.01)

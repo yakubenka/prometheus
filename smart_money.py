@@ -46,7 +46,9 @@ _S.headers["User-Agent"] = "Prometheus/3.0"
 # Кэш outcomes по market_id
 _OUTCOME_CACHE: dict[str, Optional[str]] = {}
 _OUTCOME_CACHE_TS: dict[str, float] = {}
-_OUTCOME_TTL = 3600  # 1 час
+_OUTCOME_TTL = 3600              # 1 час — TTL записи
+_OUTCOME_CACHE_CLEANUP_INTERVAL = 300   # запускать чистку раз в 5 минут
+_OUTCOME_CACHE_LAST_CLEANUP: float = 0.0
 
 
 class TraderClass(Enum):
@@ -100,12 +102,28 @@ class SmartSignal:
 
 # ── Outcome enrichment ────────────────────────────────────────────────────────
 
+def _maybe_cleanup_outcome_cache() -> None:
+    """Удаляет просроченные записи из кэша. Запускается не чаще раза в 5 минут."""
+    global _OUTCOME_CACHE_LAST_CLEANUP
+    now = time.time()
+    if now - _OUTCOME_CACHE_LAST_CLEANUP < _OUTCOME_CACHE_CLEANUP_INTERVAL:
+        return
+    expired = [mid for mid, ts in list(_OUTCOME_CACHE_TS.items()) if now - ts > _OUTCOME_TTL]
+    for mid in expired:
+        _OUTCOME_CACHE.pop(mid, None)
+        _OUTCOME_CACHE_TS.pop(mid, None)
+    if expired:
+        log.debug(f"Outcome cache cleanup: удалено {len(expired)} просроченных записей")
+    _OUTCOME_CACHE_LAST_CLEANUP = now
+
+
 def _fetch_market_outcome(market_id: str) -> Optional[str]:
     """
     Получить outcome закрытого рынка через Gamma API.
     YES если финальная цена >= 0.97, NO если <= 0.03.
     Кэшируем на 1 час.
     """
+    _maybe_cleanup_outcome_cache()
     now = time.time()
     if market_id in _OUTCOME_CACHE:
         if now - _OUTCOME_CACHE_TS.get(market_id, 0) < _OUTCOME_TTL:

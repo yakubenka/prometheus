@@ -46,6 +46,8 @@ if TYPE_CHECKING:
     from intel import IntelPipeline
     from anthropic import Anthropic
 
+from config import cfg
+
 log = logging.getLogger("prometheus.position_review")
 
 CLOB  = "https://clob.polymarket.com"
@@ -53,8 +55,6 @@ GAMMA = "https://gamma-api.polymarket.com"
 
 _S = requests.Session()
 _S.headers["User-Agent"] = "Prometheus/3.0"
-
-_MODEL = "claude-sonnet-4-20250514"
 
 
 # ── Dataclasses ────────────────────────────────────────────────────────────────
@@ -252,7 +252,7 @@ Return ONLY JSON:
     try:
         from anthropic import Anthropic as _Anthropic
         resp = ai.messages.create(
-            model=_MODEL,
+            model=cfg.review_model,
             max_tokens=150,
             messages=[{"role": "user", "content": prompt}],
         )

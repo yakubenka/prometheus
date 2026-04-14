@@ -82,6 +82,7 @@ class Config:
     all_strategies_weak_min_usd: float = _f("ALL_STRATEGIES_WEAK_MIN_USD", 1.0)
 
     logs_dir:       str = _s("LOGS_DIR", "/app/logs")
+    review_model:   str = _s("REVIEW_MODEL", "claude-sonnet-4-20250514")
 
     def validate(self) -> None:
         if self.ai_mode not in {"off", "minimal", "full"}:
