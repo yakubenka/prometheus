@@ -27,6 +27,7 @@ from position_review import PositionReviewer
 from domain_intel import DomainPrior, build_market_context, portfolio_kelly_size
 from liquidity import is_market_liquid
 from strategy_control import StrategyControl
+from polymarket_client import PolymarketClient
 
 import logging
 log = logging.getLogger("prometheus.main")
@@ -220,6 +221,8 @@ class Prometheus:
         )
         self._domain_prior = DomainPrior(cfg.logs_dir)
         self._pending_open_notifies: dict[str, dict] = {}
+        self._poly_client  = PolymarketClient(cfg.poly_funder)
+        self._real_bankroll: float = cfg.bankroll   # обновляется в _sync_balance()
         self._strategy_control = StrategyControl(
             cfg.logs_dir,
             min_trades=cfg.strategy_min_trades,
@@ -349,7 +352,8 @@ class Prometheus:
         if not pending:
             return
 
-        real_positions = fetch_polymarket_positions(cfg.poly_funder)
+        # Используем PolymarketClient (кэшированный, thread-safe) вместо прямого вызова
+        real_positions = self._poly_client.positions_dict()
         now_ts = time.time()
 
         for action in pending:
@@ -521,6 +525,49 @@ class Prometheus:
             except Exception as e:
                 log.warning(f"Intel error: {e}")
 
+    def _sync_balance(self) -> None:
+        """
+        Синхронизировать реальный баланс с Polymarket.
+
+        Обновляет self._real_bankroll — используется для Kelly sizing.
+        Формула: initial_bankroll + realized_pnl + unrealised_pnl_from_polymarket
+
+        Данные из Polymarket Data API (без авторизации):
+        - Текущая рыночная стоимость каждой позиции
+        - Unrealised P&L
+        В реальном портфеле это даёт честную картину текущего капитала.
+        """
+        if not cfg.poly_funder:
+            return
+        try:
+            snap = self._poly_client.portfolio()
+            risk_snap = self.risk.snapshot()
+            realized_pnl = risk_snap.get("total_pnl", 0.0)
+
+            old_bankroll = self._real_bankroll
+            self._real_bankroll = max(
+                1.0,
+                cfg.bankroll + realized_pnl + snap.unrealised_pnl,
+            )
+
+            if abs(self._real_bankroll - old_bankroll) > 0.5:
+                log.info(
+                    f"💰 Bankroll sync: ${old_bankroll:.2f} → ${self._real_bankroll:.2f} "
+                    f"(realized ${realized_pnl:+.2f}, uPnL ${snap.unrealised_pnl:+.2f}, "
+                    f"{snap.position_count} позиций на Polymarket)"
+                )
+
+            # Сверяем количество позиций: внутри vs на Polymarket
+            internal_count = len(self.risk.open_positions)
+            poly_count = snap.position_count
+            if internal_count != poly_count and poly_count > 0:
+                log.warning(
+                    f"⚠️ Рассинхронизация позиций: "
+                    f"внутри={internal_count}, на Polymarket={poly_count}"
+                )
+        except Exception as e:
+            log.debug(f"_sync_balance error: {e}")
+
     def _check_risk_alerts(self) -> None:
         snap = self.risk.snapshot()
         pct  = snap["daily_loss_pct"]
@@ -532,6 +579,7 @@ class Prometheus:
 
     def _trade_cycle(self) -> None:
         log.info("─" * 60)
+        self._sync_balance()   # актуализируем bankroll перед Kelly sizing
         snap = self.risk.snapshot()
 
         if not snap["can_trade"]:
@@ -737,11 +785,12 @@ class Prometheus:
             log.info(f"  Context: {mctx.summary()}")
 
             # Portfolio Kelly с domain multiplier
+            # Используем реальный bankroll из Polymarket (не статичный cfg.bankroll)
             size = portfolio_kelly_size(
                 ai_probability   = result.ai_probability,
                 market_price     = market.yes_price,
                 direction        = result.direction,
-                bankroll         = cfg.bankroll,
+                bankroll         = self._real_bankroll,
                 kelly_fraction   = cfg.kelly_frac,
                 open_positions   = self.risk.open_positions,
                 max_position_usd = cfg.max_pos_usd,
@@ -790,6 +839,7 @@ class Prometheus:
                          else market.token_id_no)
                 self._market_signals[market.id] = result.signals
                 ai_trades += 1
+                self._poly_client.invalidate()  # сброс кэша после сделки
                 self._register_open_after_execution(
                     market_id=market.id,
                     question=market.question,
