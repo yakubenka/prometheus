@@ -193,9 +193,9 @@ def _ai_review(pos, current_price: float, trigger: str,
 
     # Экономим AI: не дёргаем модель на слабых технических триггерах.
     upnl_preview = _calc_unrealised_pnl(pos, current_price)
-    if trigger.startswith("price_up_") and upnl_preview < 3.0:
+    if trigger.startswith("price_up_") and upnl_preview < cfg.review_min_gain_usd:
         return ReviewDecision("HOLD", "small gain, no AI review", 0.5, 0.0, 0.0, trigger, current_price, upnl_preview)
-    if trigger.startswith("price_down_") and abs(upnl_preview) < 2.0:
+    if trigger.startswith("price_down_") and abs(upnl_preview) < cfg.review_min_loss_usd:
         return ReviewDecision("HOLD", "small drawdown, no AI review", 0.5, 0.0, 0.0, trigger, current_price, upnl_preview)
 
     # Собираем контекст

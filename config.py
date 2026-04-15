@@ -83,6 +83,9 @@ class Config:
 
     logs_dir:       str = _s("LOGS_DIR", "/app/logs")
     review_model:   str = _s("REVIEW_MODEL", "claude-sonnet-4-20250514")
+    review_min_gain_usd:  float = _f("REVIEW_MIN_GAIN_USD", 3.0)
+    review_min_loss_usd:  float = _f("REVIEW_MIN_LOSS_USD", 2.0)
+    enrich_request_interval: float = _f("ENRICH_REQUEST_INTERVAL_SEC", 0.05)
 
     def validate(self) -> None:
         if self.ai_mode not in {"off", "minimal", "full"}:
