@@ -142,6 +142,44 @@ class LearningEngine:
         self._save_weights(weights, accuracies)
         return weights
 
+    def probability_shrinkage(self) -> float:
+        """
+        Коэффициент сжатия вероятности ансамбля к рыночной цене (0.50–1.00).
+
+        Ensemble-вероятность — взвешенный индекс уверенности, не калиброванная
+        вероятность. Сжатие компенсирует систематическое завышение claimed edge:
+
+            calibrated_p = market_price + (raw_p - market_price) * shrinkage
+
+        При малом объёме данных: shrinkage 0.50 — Kelly bet вдвое меньше.
+        При росте track record: shrinkage растёт до 0.95 — почти без поправки.
+        При плохом track record: shrinkage падает до 0.55 — защита от переставки.
+        """
+        n = len({r.market_id for r in self._records})   # уникальные рынки
+
+        if n < 10:
+            return 0.50   # почти нет данных — берём только половину claimed edge
+
+        if n < 30:
+            return 0.65   # ранняя стадия
+
+        if n < 60:
+            return 0.80   # достаточно данных для умеренного доверия
+
+        # При >= 60 рынках: калибруем по реальному win rate последних 50 записей
+        recent = [r for r in self._records[-100:] if r.direction != "NEUTRAL"]
+        if len(recent) < 20:
+            return 0.80
+
+        win_rate = sum(1 for r in recent if r.was_correct) / len(recent)
+        if win_rate >= 0.65:
+            return 0.95   # сильный track record — минимальное сжатие
+        if win_rate >= 0.55:
+            return 0.85   # хороший track record
+        if win_rate >= 0.45:
+            return 0.70   # средний
+        return 0.55       # слабый track record — заметное сжатие
+
     def stats(self) -> dict:
         """Статистика точности по сигналам — для дашборда."""
         if not self._records:
