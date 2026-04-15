@@ -767,12 +767,20 @@ class Prometheus:
                 else:
                     continue
 
-            if result.strategy_type == "ai_assisted" and result.edge < max(cfg.ai_unconfirmed_edge, domain_min_edge + 0.02):
-                log.info(f"  AI-assisted edge too small ({result.edge:.1%}) — skip")
-                continue
+            _ai_size_mult = 1.0
             if result.strategy_type == "ai_assisted":
-                log.info("  AI-assisted entries disabled — AI is filter only")
-                continue
+                if result.edge < max(cfg.ai_unconfirmed_edge, domain_min_edge + 0.02):
+                    log.info(f"  AI-assisted edge too small ({result.edge:.1%}) — skip")
+                    continue
+                _min_quality = max(cfg.min_trade_quality + 15, 75)
+                if result.trade_quality < _min_quality:
+                    log.info(f"  AI-assisted quality {result.trade_quality} < {_min_quality} — skip")
+                    continue
+                _ai_size_mult = 0.50
+                log.info(
+                    f"  AI-assisted entry: edge={result.edge:.1%}, "
+                    f"quality={result.trade_quality} — size ×0.50"
+                )
 
             strategy_mult = self._strategy_control.size_multiplier(result.strategy_type)
             if strategy_mult <= 0:
@@ -821,6 +829,10 @@ class Prometheus:
             if strategy_mult < 1.0:
                 size = max(1.0, size * strategy_mult)
                 log.info(f"  Strategy control mult {strategy_mult:.0%}: ${size:.2f}")
+
+            if _ai_size_mult < 1.0:
+                size = size * _ai_size_mult
+                log.info(f"  AI-assisted size ×{_ai_size_mult:.2f}: ${size:.2f}")
 
             if self._strategy_control.all_primary_strategies_weak():
                 size = min(max(1.0, size), self._strategy_control.all_weak_min_usd)
