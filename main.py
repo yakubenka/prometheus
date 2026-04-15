@@ -544,12 +544,15 @@ class Prometheus:
         - Unrealised P&L
         В реальном портфеле это даёт честную картину текущего капитала.
         """
+        risk_snap    = self.risk.snapshot()
+        realized_pnl = risk_snap.get("total_pnl", 0.0)
+
         if not cfg.poly_funder:
+            # Нет адреса кошелька — считаем хотя бы по реализованному P&L
+            self._real_bankroll = max(1.0, cfg.bankroll + realized_pnl)
             return
         try:
             snap = self._poly_client.portfolio()
-            risk_snap = self.risk.snapshot()
-            realized_pnl = risk_snap.get("total_pnl", 0.0)
 
             old_bankroll = self._real_bankroll
             self._real_bankroll = max(
