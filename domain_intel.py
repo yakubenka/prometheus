@@ -460,10 +460,13 @@ def get_domain_sentiment(domain: str, intel_db) -> Optional[DomainSentiment]:
         if not points:
             return None
 
-        sentiments = [dp.sentiment for dp in points if dp.sentiment != 0]
-        if not sentiments:
-            return None
-
+        # Берём ВСЕ точки: sentiment=0.0 это "нейтральный", не "не задан".
+        # Старый фильтр `!= 0` отбрасывал RSS/news источники у которых
+        # sentiment не вычислялся явно — в результате domain sentiment
+        # часто возвращал None даже при наличии данных.
+        sentiments = [dp.sentiment for dp in points]
+        # Фильтруем только точки с явной позицией (|s| > 0.05) для подсчёта
+        # bullish/bearish, но среднее считаем по всем
         avg = sum(sentiments) / len(sentiments)
         bullish = sum(1 for s in sentiments if s > 0.1)
         bearish = sum(1 for s in sentiments if s < -0.1)

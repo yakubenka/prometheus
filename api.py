@@ -417,12 +417,11 @@ async def close_position(request: Request, _=Depends(_manual_close_auth)):
         ov["open_positions"] = max(0, int(ov.get("open_positions", 1)) - 1)
         ov["open_exposure"]  = round(max(0.0, float(ov.get("open_exposure", size)) - size), 2)
         ov["total_trades"]   = int(ov.get("total_trades", 0)) + 1
-        # Пересчёт win_rate
-        total = ov["total_trades"]
-        if total > 0:
-            prev_wins = round(float(ov.get("win_rate", 0)) * (total - 1))
-            wins = prev_wins + (1 if pnl > 0 else 0)
-            ov["win_rate"] = round(wins / total, 3)
+        # Пересчёт win_rate из реальной истории — надёжнее чем обратная реконструкция
+        all_history = pos_data.get("history", [])
+        if all_history:
+            wins = sum(1 for p in all_history if float(p.get("pnl") or 0) > 0)
+            ov["win_rate"] = round(wins / len(all_history), 3)
         store_set("overview", ov)
 
     return {"ok": True, "pnl": pnl}
