@@ -87,6 +87,11 @@ class Config:
     review_min_loss_usd:  float = _f("REVIEW_MIN_LOSS_USD", 2.0)
     enrich_request_interval: float = _f("ENRICH_REQUEST_INTERVAL_SEC", 0.05)
 
+    # Stop-loss и time-based exit
+    stop_loss_pct:          float = _f("STOP_LOSS_PCT", 0.40)
+    time_exit_hours:        float = _f("TIME_EXIT_HOURS", 2.0)
+    time_exit_min_loss_pct: float = _f("TIME_EXIT_MIN_LOSS_PCT", 0.20)
+
     def validate(self) -> None:
         if self.ai_mode not in {"off", "minimal", "full"}:
             raise ValueError("AI_MODE должен быть off|minimal|full")

@@ -17,8 +17,10 @@ from datetime import datetime, timezone
 from typing import Optional
 import requests
 
+from datetime import datetime, timezone
 from data import fetch_current_price
 from risk import Position
+from config import cfg
 
 
 def sell_position_on_polymarket(token_id: str, shares: float,
@@ -88,73 +90,106 @@ GAMMA = "https://gamma-api.polymarket.com"
 CLOB  = "https://clob.polymarket.com"
 
 
-def check_market_outcome(market_id: str, current_price: float = None) -> Optional[str]:
+def get_market_info(market_id: str) -> dict:
     """
-    Определяет итог рынка (YES/NO) через Gamma API.
+    Получить полные данные рынка из Gamma API одним запросом.
+    Возвращает сырой dict (или пустой при ошибке).
 
-    current_price здесь — YES-токен цена (не наш токен).
-    Используется только как fallback если Gamma недоступна.
+    Содержит: winner, outcomePrices, closed, active, endDate, endDateIso.
+    Используется внутри resolver.run() чтобы сделать ОДИН запрос вместо двух
+    (раньше вызывались get_yes_price + check_market_outcome раздельно).
     """
     try:
         r = requests.get(f"{GAMMA}/markets/{market_id}", timeout=8)
-        if r.status_code != 200:
+        if r.status_code == 200:
+            return r.json()
+        log.debug(f"get_market_info HTTP {r.status_code} for {market_id}")
+    except Exception as e:
+        log.debug(f"get_market_info error {market_id}: {e}")
+    return {}
+
+
+def check_market_outcome(
+    market_id: str,
+    current_price: float = None,
+    market_data: dict = None,
+) -> Optional[str]:
+    """
+    Определяет итог рынка (YES/NO).
+
+    market_data — предзагруженный ответ Gamma API (из get_market_info).
+    Если не передан — выполняется HTTP запрос.
+    current_price — YES-цена как fallback при недоступности API.
+    """
+    if market_data is None:
+        try:
+            r = requests.get(f"{GAMMA}/markets/{market_id}", timeout=8)
+            if r.status_code != 200:
+                if current_price is not None:
+                    if current_price >= 0.99:  return "YES"
+                    if current_price <= 0.01:  return "NO"
+                return None
+            market_data = r.json()
+        except Exception as e:
+            log.debug(f"check_market_outcome error {market_id}: {e}")
             if current_price is not None:
                 if current_price >= 0.99:  return "YES"
                 if current_price <= 0.01:  return "NO"
             return None
 
-        m = r.json()
+    m = market_data
 
-        # 1. Явный winner из API
-        winner = m.get("winner") or m.get("resolvedOutcome") or m.get("resolution")
-        if winner:
-            w = str(winner).upper()
-            if w in ("YES", "1", "TRUE"):  return "YES"
-            if w in ("NO",  "0", "FALSE"): return "NO"
+    # 1. Явный winner из API
+    winner = m.get("winner") or m.get("resolvedOutcome") or m.get("resolution")
+    if winner:
+        w = str(winner).upper()
+        if w in ("YES", "1", "TRUE"):  return "YES"
+        if w in ("NO",  "0", "FALSE"): return "NO"
 
-        # 2. Закрытый рынок — outcomePrices[0] = YES цена после резолюции
-        if m.get("closed") or m.get("active") == False:
-            prices = m.get("outcomePrices")
-            if isinstance(prices, str):
-                try:
-                    prices = json.loads(prices)
-                except Exception:
-                    prices = None
-            if prices and len(prices) >= 2:
-                yes_final = float(prices[0])
-                no_final  = float(prices[1])
-                if yes_final >= 0.97: return "YES"
-                if no_final  >= 0.97: return "NO"
-                if yes_final > no_final and yes_final >= 0.90: return "YES"
-                if no_final > yes_final and no_final  >= 0.90: return "NO"
+    # 2. Закрытый рынок — outcomePrices[0] = YES цена после резолюции
+    if m.get("closed") or m.get("active") is False:
+        prices = m.get("outcomePrices")
+        if isinstance(prices, str):
+            try:
+                prices = json.loads(prices)
+            except Exception:
+                prices = None
+        if prices and len(prices) >= 2:
+            yes_final = float(prices[0])
+            no_final  = float(prices[1])
+            if yes_final >= 0.97: return "YES"
+            if no_final  >= 0.97: return "NO"
+            if yes_final > no_final and yes_final >= 0.90: return "YES"
+            if no_final > yes_final and no_final  >= 0.90: return "NO"
 
-        return None
-
-    except Exception as e:
-        log.debug(f"check_market_outcome error {market_id}: {e}")
-        if current_price is not None:
-            if current_price >= 0.99:  return "YES"
-            if current_price <= 0.01:  return "NO"
-        return None
+    return None
 
 
 def get_yes_price(market_id: str) -> Optional[float]:
     """
     YES-цена рынка через Gamma API.
-    Используется для определения исхода — НЕ для P&L нашей позиции.
+    Для разовых запросов. Внутри resolver.run() используй get_market_info().
     """
+    info = get_market_info(market_id)
+    return _yes_price_from_info(info)
+
+
+def _yes_price_from_info(info: dict) -> Optional[float]:
+    """Извлечь YES-цену из уже загруженного dict Gamma API."""
     try:
-        r = requests.get(f"{GAMMA}/markets/{market_id}", timeout=5)
-        if r.status_code == 200:
-            m = r.json()
-            prices = m.get("outcomePrices")
-            if isinstance(prices, str):
-                prices = json.loads(prices)
-            if prices:
-                return float(prices[0])
+        prices = info.get("outcomePrices")
+        if isinstance(prices, str):
+            prices = json.loads(prices)
+        if prices:
+            return float(prices[0])
     except Exception:
         pass
     return None
+
+
+def _end_date_from_info(info: dict) -> Optional[str]:
+    """Извлечь дату закрытия рынка из dict Gamma API."""
+    return info.get("endDate") or info.get("endDateIso")
 
 
 def get_current_price(token_id: str) -> Optional[float]:
@@ -461,14 +496,17 @@ class PositionResolver:
                 log.info(f"📡 Polymarket: {len(real_positions)} реальных позиций")
 
         for pos in open_pos:
-            # Цена НАШЕГО токена — для stop-loss
+            # Цена НАШЕГО токена — для stop-loss и time-based exit
             cur_token_price = get_current_price(pos.token_id) if pos.token_id else None
 
-            # YES-цена рынка — для определения исхода
-            yes_price = get_yes_price(pos.market_id)
+            # ОДИН запрос к Gamma — содержит всё: outcome, yes_price, end_date
+            market_info = get_market_info(pos.market_id)
+            yes_price   = _yes_price_from_info(market_info)
+            end_date    = _end_date_from_info(market_info)
 
-            # 1. Проверка резолюции рынка
-            outcome = check_market_outcome(pos.market_id, current_price=yes_price)
+            # 1. Проверка резолюции рынка (без повторного HTTP)
+            outcome = check_market_outcome(pos.market_id, current_price=yes_price,
+                                           market_data=market_info)
 
             if outcome is not None:
                 won = (
@@ -527,13 +565,56 @@ class PositionResolver:
                                     pass
                 continue
 
-            # 2. Stop-loss — потеряли 40%+ от входной цены нашего токена
+            # 2. Time-based exit: рынок закрывается менее чем через N часов
+            #    и мы уже в минусе на cfg.time_exit_min_loss_pct+
+            if cur_token_price is not None and end_date:
+                try:
+                    end_dt     = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+                    hours_left = (end_dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                    entry_tok  = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
+                    cur_tok    = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
+                    time_loss  = (entry_tok - cur_tok) / entry_tok if entry_tok > 0 else 0
+
+                    if 0 < hours_left < cfg.time_exit_hours and time_loss >= cfg.time_exit_min_loss_pct:
+                        pnl = round((cur_tok - entry_tok) / max(entry_tok, 0.01) * pos.size_usd, 2)
+                        log.info(
+                            f"⏰ TIME EXIT: {hours_left:.1f}h left, "
+                            f"down {time_loss:.0%} | {pos.question[:50]}"
+                        )
+                        shares = calc_position_shares(pos)
+                        sold, actual_price = False, cur_token_price
+                        if pos.token_id and poly_key:
+                            sold, actual_price = sell_position_on_polymarket(
+                                token_id=pos.token_id, shares=shares, poly_key=poly_key,
+                            )
+                            if not sold:
+                                log.warning(f"⚠️ TIME EXIT sell failed: {pos.question[:40]}")
+                                continue
+                            confirmed = verify_position_closed(
+                                token_id=pos.token_id,
+                                funder=os.environ.get("POLYMARKET_FUNDER", ""),
+                                retries=3, wait_sec=10,
+                            )
+                            if not confirmed:
+                                log.warning(f"⚠️ TIME EXIT: sell sent but position still visible")
+                                continue
+                        closed = self.risk.close_with_pnl(
+                            pos.market_id, exit_price=actual_price, pnl=pnl,
+                        )
+                        if closed:
+                            closed_now.append(self._make_closed_dict(pos, "TIME_EXIT", False, pnl))
+                            self._notify(pos, "TIME_EXIT", False, pnl, actual_price, time_loss)
+                        continue
+                except Exception as e:
+                    log.debug(f"time_exit parse error: {e}")
+
+            # 3. Stop-loss — потеряли cfg.stop_loss_pct+ от входной цены нашего токена
             if cur_token_price is not None and cur_token_price > 0:
                 entry_token   = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
                 current_token = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
                 loss_pct = (entry_token - current_token) / entry_token if entry_token > 0 else 0
 
-                if loss_pct >= 0.40:
+                if loss_pct >= cfg.stop_loss_pct:
                     pnl = round((current_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
                     
                     # Реально продаём токены на Polymarket
