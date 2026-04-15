@@ -111,13 +111,14 @@ def _maybe_cleanup_outcome_cache() -> None:
     if now - _OUTCOME_CACHE_LAST_CLEANUP < _OUTCOME_CACHE_CLEANUP_INTERVAL:
         return
     with _OUTCOME_CACHE_LOCK:
+        # Обновляем timestamp внутри lock чтобы избежать гонки
+        _OUTCOME_CACHE_LAST_CLEANUP = now
         expired = [mid for mid, ts in list(_OUTCOME_CACHE_TS.items()) if now - ts > _OUTCOME_TTL]
         for mid in expired:
             _OUTCOME_CACHE.pop(mid, None)
             _OUTCOME_CACHE_TS.pop(mid, None)
     if expired:
         log.debug(f"Outcome cache cleanup: удалено {len(expired)} просроченных записей")
-    _OUTCOME_CACHE_LAST_CLEANUP = now
 
 
 def _fetch_market_outcome(market_id: str) -> Optional[str]:

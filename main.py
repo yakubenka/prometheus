@@ -7,6 +7,7 @@ import json
 import os
 import signal as _signal
 import time
+from collections import deque
 from datetime import datetime, date, timezone
 from pathlib import Path
 from anthropic import Anthropic
@@ -216,9 +217,10 @@ class Prometheus:
         self._daily_sm_alerts:  int             = 0
         self._last_report_date: date | None     = None
         self._last_limit_warn:  float           = 0.0
-        self._signal_history:   list            = []   # история сигналов для дашборда
+        self._signal_history:   deque           = deque(maxlen=50)  # история сигналов для дашборда
         self._last_breaking:    float           = 0.0  # время последнего breaking news цикла
-        self._whale_alerts:     list            = []   # крупные необычные сделки
+        self._whale_alerts:     deque           = deque(maxlen=50)  # крупные необычные сделки
+        self._whale_alert_keys: set[str]        = set()             # для O(1) дедупликации
         self._market_signals:   dict            = {}   # market_id → list[Signal] для learning
         self._reviewer = PositionReviewer(
             risk_manager = self.risk,
@@ -609,6 +611,9 @@ class Prometheus:
         from data import fetch_large_trades
         large_trades = fetch_large_trades(min_size=3000, hours_back=6)
         for t in large_trades[:30]:
+            key = f"{t.market_id}_{t.side}_{round(t.size)}"
+            if key in self._whale_alert_keys:
+                continue
             alert = {
                 "question":  t.question or t.market_id,
                 "direction": "YES" if t.side == "BUY" else "NO",
@@ -617,21 +622,17 @@ class Prometheus:
                 "wallet":    (t.maker or "")[:8] + "…" if t.maker else "unknown",
                 "time":      t.timestamp.strftime("%H:%M") if t.timestamp else "",
                 "type":      "whale",
+                "_key":      key,  # сохраняем для синхронизации ключей
             }
             # Проверяем тип кошелька
             if t.maker and t.maker in self.sm.known_wallets:
                 profile = self.sm.known_wallets[t.maker]
                 if profile.trader_class.value != "noise":
                     alert["type"] = profile.trader_class.value
-            # Добавляем если ещё нет такой же (дедупликация по market_id + side + size)
-            key = f"{t.market_id}_{t.side}_{round(t.size)}"
-            existing_keys = {
-                f"{a.get('question','')}_{a.get('direction','')}_{round(a.get('size',0))}"
-                for a in self._whale_alerts
-            }
-            if key not in existing_keys:
-                self._whale_alerts.append(alert)
-        self._whale_alerts = self._whale_alerts[-50:]  # последние 50
+            self._whale_alerts.append(alert)
+            self._whale_alert_keys.add(key)
+        # Синхронизируем ключи с живым содержимым deque — удаляем вытесненные записи
+        self._whale_alert_keys = {a["_key"] for a in self._whale_alerts if "_key" in a}
 
         for sig in sm_signals[:3]:
             if not self.risk.snapshot()["can_trade"]:
@@ -749,7 +750,7 @@ class Prometheus:
                 "pre_score":     cand.pre_score,
                 "question_type": result.question_type,
             })
-            self._signal_history = self._signal_history[-50:]
+            # deque(maxlen=50) автоматически отбрасывает старые записи
 
             if result.direction == "NEUTRAL":
                 continue
@@ -1001,7 +1002,7 @@ class Prometheus:
                 ai_probability = 0.93,
                 market_price   = market.yes_price,
                 direction      = direction,
-                bankroll       = cfg.bankroll,
+                bankroll       = self._real_bankroll,  # реальный баланс, не стартовый
             ) * 0.25   # 25% of normal Kelly for safety
 
             if size < 0.50:
@@ -1179,7 +1180,7 @@ class Prometheus:
                     "total_noise":   sum(1 for p in self.sm.known_wallets.values() if p.trader_class.value == "noise"),
                     "status":        "active" if self._daily_sm_alerts > 0 else "scanning",
                     "scanned_today": self._daily_signals,
-                    "whale_alerts":  self._whale_alerts[-20:],
+                    "whale_alerts":  list(self._whale_alerts)[-20:],
                 },
                 "learning": {
                     "signal_stats": learning_stats,
