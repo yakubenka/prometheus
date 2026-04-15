@@ -120,9 +120,12 @@ def init_db():
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
-        conn.commit(); cur.close(); conn.close()
+        conn.commit()
+        cur.close()
     except Exception as e:
         print(f"DB init: {e}")
+    finally:
+        conn.close()
 
 def db_set(key: str, value: dict):
     conn = _conn()
@@ -133,9 +136,12 @@ def db_set(key: str, value: dict):
             INSERT INTO bot_state (key, value, updated_at) VALUES (%s, %s, NOW())
             ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
         """, (key, json.dumps(value)))
-        conn.commit(); cur.close(); conn.close()
+        conn.commit()
+        cur.close()
     except Exception as e:
         print(f"DB set: {e}")
+    finally:
+        conn.close()
 
 def db_get(key: str):
     conn = _conn()
@@ -144,11 +150,13 @@ def db_get(key: str):
         cur = conn.cursor()
         cur.execute("SELECT value FROM bot_state WHERE key=%s", (key,))
         row = cur.fetchone()
-        cur.close(); conn.close()
+        cur.close()
         return json.loads(row[0]) if row else None
     except Exception as e:
         print(f"DB get: {e}")
         return None
+    finally:
+        conn.close()
 
 def db_last_push():
     conn = _conn()
@@ -157,11 +165,13 @@ def db_last_push():
         cur = conn.cursor()
         cur.execute("SELECT updated_at FROM bot_state WHERE key='overview'")
         row = cur.fetchone()
-        cur.close(); conn.close()
+        cur.close()
         return row[0] if row else None
     except Exception as e:
         print(f"DB last_push error: {e}")
         return None
+    finally:
+        conn.close()
 
 init_db()
 

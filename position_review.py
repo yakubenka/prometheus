@@ -82,8 +82,8 @@ def _get_current_price(token_id: str) -> Optional[float]:
         if r.status_code == 200:
             val = float(r.json().get("mid", 0))
             return val if val > 0 else None
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug(f"Price fetch error for {token_id}: {e}")
     return None
 
 
@@ -256,6 +256,8 @@ Return ONLY JSON:
             max_tokens=150,
             messages=[{"role": "user", "content": prompt}],
         )
+        if not resp.content:
+            raise ValueError("Empty response from AI")
         raw  = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
         data = json.loads(raw)
 

@@ -356,7 +356,11 @@ class Prometheus:
             if not action.due(now_ts):
                 continue
             real_pos = real_positions.get(action.token_id or "")
-            if real_pos and float(real_pos.get("size", 0) or 0) > 0.01:
+            try:
+                real_size = float(real_pos.get("size", 0) or 0) if real_pos else 0.0
+            except (TypeError, ValueError):
+                real_size = 0.0
+            if real_size > 0.01:
                 self.risk.open(
                     action.market_id, action.question, action.direction,
                     action.entry_price, action.size_usd, action.tags,
