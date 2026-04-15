@@ -230,6 +230,35 @@ class LearningEngine:
         except Exception as e:
             log.error(f"Learning load error: {e}")
 
+    def load_last_weights(self) -> dict | None:
+        """
+        Загрузить последние сохранённые веса из weights_history.jsonl.
+        Вызывать при старте бота чтобы восстановить накопленные веса.
+        Возвращает None если файл не существует или запись некорректна.
+        """
+        path = self._dir / "weights_history.jsonl"
+        if not path.exists():
+            return None
+        try:
+            last_line = None
+            with path.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        last_line = line
+            if not last_line:
+                return None
+            entry = json.loads(last_line)
+            weights = entry.get("weights", {})
+            # Проверяем что запись полная — все ключи на месте
+            if weights and all(k in SIGNAL_NAMES for k in weights):
+                n = entry.get("n_records", "?")
+                log.info(f"📥 Веса восстановлены из истории ({n} записей): {weights}")
+                return weights
+        except Exception as e:
+            log.warning(f"load_last_weights: не удалось загрузить — {e}")
+        return None
+
     def _save_weights(self, weights: dict, accuracies: dict):
         try:
             path = self._dir / "weights_history.jsonl"

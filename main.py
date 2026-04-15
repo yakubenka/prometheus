@@ -202,6 +202,13 @@ class Prometheus:
         self.resolver  = PositionResolver(self.risk, self.tg)
         self.learning  = LearningEngine(cfg.logs_dir)
 
+        # Восстанавливаем накопленные веса из предыдущей сессии
+        _saved_weights = self.learning.load_last_weights()
+        if _saved_weights:
+            self.signals.update_weights(_saved_weights)
+        else:
+            log.info("🧠 Нет сохранённых весов — используем дефолты")
+
         # State
         self._shutdown:         bool            = False
         self._last_intel:       datetime | None = None
