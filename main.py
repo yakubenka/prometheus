@@ -800,10 +800,23 @@ class Prometheus:
             )
             log.info(f"  Context: {mctx.summary()}")
 
+            # Калибровка вероятности: сжимаем claimed edge к market price
+            # пропорционально доверию к track record (shrinkage 0.50–0.95).
+            # Компенсирует систематическое завышение ensemble-оценок.
+            _shrinkage = self.learning.probability_shrinkage()
+            _cal_prob = market.yes_price + (result.ai_probability - market.yes_price) * _shrinkage
+            _cal_prob = max(0.01, min(0.99, _cal_prob))
+            if _shrinkage < 0.90:
+                log.info(
+                    f"  Prob shrinkage ×{_shrinkage:.2f}: "
+                    f"{result.ai_probability:.3f} → {_cal_prob:.3f} "
+                    f"(n={len(self.learning._records)} records)"
+                )
+
             # Portfolio Kelly с domain multiplier
             # Используем реальный bankroll из Polymarket (не статичный cfg.bankroll)
             size = portfolio_kelly_size(
-                ai_probability   = result.ai_probability,
+                ai_probability   = _cal_prob,
                 market_price     = market.yes_price,
                 direction        = result.direction,
                 bankroll         = self._real_bankroll,
