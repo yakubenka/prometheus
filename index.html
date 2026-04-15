@@ -124,6 +124,14 @@ a{color:inherit;text-decoration:none}
   .hero{padding:22px 18px}
   .value-lg{font-size:20px}
 }
+.balance-breakdown{margin-top:14px;display:flex;flex-direction:column;gap:5px}
+.brow{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:8px 12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
+.bl{color:var(--muted)}
+.bv{font-weight:600}
+.poly-tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--good);letter-spacing:.04em;vertical-align:middle}
+.poly-dot{width:5px;height:5px;border-radius:50%;background:currentColor;display:inline-block}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.3}}
+.poly-dot.pulse{animation:livepulse 2s ease-in-out infinite}
 </style>
 </head>
 <body>
@@ -156,8 +164,9 @@ a{color:inherit;text-decoration:none}
         <div class="kicker">Main status</div>
         <div class="hero-row">
           <div>
-            <div class="hero-main" id="heroBankroll">$0</div>
-            <div class="hero-sub" id="heroSubtitle">No data yet</div>
+            <div class="hero-main" id="heroBankroll">—</div>
+            <div class="hero-sub" id="heroSubtitle">Connecting…</div>
+            <div class="balance-breakdown" id="balanceBreakdown" style="display:none"></div>
           </div>
           <div class="badges" id="heroBadges"></div>
         </div>
@@ -324,6 +333,7 @@ const state = {
   learning: {},
   strategies: {strategies: {}},
   settings: {},
+  polyLive: {configured: false, positions: [], portfolio_value: 0, unrealised_pnl: 0, total_invested: 0, synced_at: null, ts: 0},
   selectedPositionId: null,
 };
 
@@ -343,6 +353,19 @@ function pct(value) {
 }
 function esc(str) {
   return String(str || '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+}
+function enrichWithLive(pos) {
+  const live = state.polyLive;
+  if (!live || !live.configured || !live.positions.length || (Date.now() - live.ts) > 45000) return pos;
+  const tokenId  = String(pos.token_id  || '');
+  const marketId = String(pos.market_id || pos.id || '');
+  const lp = live.positions.find((p) =>
+    (tokenId  && p.token_id  === tokenId)  ||
+    (marketId && (p.market_id === marketId || p.token_id === marketId))
+  );
+  if (!lp) return pos;
+  return {...pos, pnl: lp.pnl, pnl_pct: lp.pnl_pct, current_price: lp.cur_price,
+    current_value: lp.current_value, poly_verified: true};
 }
 function pnlClass(value) {
   const num = Number(value || 0);
@@ -390,26 +413,38 @@ function buildAlerts() {
 }
 
 function renderLivePositions() {
-  const openList = state.positions.open || [];
-  const section  = $('livePositionsSection');
-  const list     = $('livePositionsList');
-  const syncEl   = $('polySync');
-  const badgeEl  = $('polyBadge');
-  const ov       = state.overview || {};
+  const live      = state.polyLive;
+  const liveFresh = live.configured && live.positions && (Date.now() - live.ts) < 45000;
+  // Enrich internal positions with Polymarket live data
+  const openList  = (state.positions.open || []).map(enrichWithLive);
+  // Fall back to polyLive-only positions when internal list is empty (bot restart)
+  const displayList = openList.length ? openList : (liveFresh ? live.positions.map((lp) => ({
+    question: lp.question, direction: lp.outcome, price: lp.avg_price,
+    current_price: lp.cur_price, size: lp.initial_value, current_value: lp.current_value,
+    pnl: lp.pnl, pnl_pct: lp.pnl_pct, poly_verified: true, status: 'open',
+    id: lp.token_id, market_id: lp.market_id,
+  })) : []);
 
-  if (!openList.length) {
-    section.style.display = 'none';
-    return;
-  }
+  const section = $('livePositionsSection');
+  const list    = $('livePositionsList');
+  const syncEl  = $('polySync');
+  const badgeEl = $('polyBadge');
+  const ov      = state.overview || {};
+
+  if (!displayList.length) { section.style.display = 'none'; return; }
   section.style.display = 'block';
 
-  const verified = openList.filter((p) => p.poly_verified).length;
-  syncEl.textContent = ov.poly_sync_at ? `Polymarket · ${ov.poly_sync_at}` : 'Synced with Polymarket';
-  badgeEl.innerHTML = verified === openList.length
+  const verified = displayList.filter((p) => p.poly_verified).length;
+  if (liveFresh && live.synced_at) {
+    syncEl.innerHTML = `Polymarket <span class="poly-tag"><span class="poly-dot pulse"></span> live · ${esc(live.synced_at)}</span>`;
+  } else {
+    syncEl.textContent = ov.poly_sync_at ? `Polymarket · ${ov.poly_sync_at}` : 'Synced with Polymarket';
+  }
+  badgeEl.innerHTML = verified === displayList.length && verified > 0
     ? statusBadge(`All ${verified} verified`, 'good')
-    : verified > 0 ? statusBadge(`${verified}/${openList.length} verified`, 'warn') : '';
+    : verified > 0 ? statusBadge(`${verified}/${displayList.length} verified`, 'warn') : '';
 
-  list.innerHTML = openList.map((p) => {
+  list.innerHTML = displayList.map((p) => {
     const dir = p.direction || 'YES';
     const pnlPctStr = p.pnl_pct ? ` (${(p.pnl_pct * 100).toFixed(1)}%)` : '';
     return `
@@ -425,18 +460,18 @@ function renderLivePositions() {
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
-          <div class="value-sm ${pnlClass(p.pnl)}">${pnlPctStr || moneyPlain(p.size || 0)}</div>
+          <div class="value-sm ${pnlClass(p.pnl)}">${pnlPctStr || moneyPlain(p.size || p.initial_value || 0)}</div>
         </div>
       </div>
       <div class="row2" style="grid-template-columns:repeat(4,minmax(0,1fr))">
         <div class="stat"><div class="sl">Entry</div><div class="sv">${pct(p.price || 0)}</div></div>
         <div class="stat"><div class="sl">Current</div><div class="sv">${pct(p.current_price || 0)}</div></div>
-        <div class="stat"><div class="sl">Size</div><div class="sv">${moneyPlain(p.size || 0)}</div></div>
-        <div class="stat"><div class="sl">Type</div><div class="sv" style="font-size:13px">${esc(formatType(p.type || ''))}</div></div>
+        <div class="stat"><div class="sl">Invested</div><div class="sv">${moneyPlain(p.size || p.initial_value || 0)}</div></div>
+        <div class="stat"><div class="sl">Value now</div><div class="sv">${p.current_value != null ? moneyPlain(p.current_value) : '—'}</div></div>
       </div>
       <div class="cta" style="margin-top:12px">
         ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket</a>` : ''}
-        <button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\\'"))}')">Close</button>
+        ${p.id || p.market_id ? `<button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\\'"))}')">Close</button>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -448,9 +483,31 @@ function renderOverview() {
   const settings = state.settings || {};
   const {pendingOpen, pendingClose, total} = pendingCounts(openList);
 
-  $('heroBankroll').textContent = moneyPlain(ov.bankroll || 0);
-  const syncTime = ov.poly_sync_at ? ` · Polymarket ${ov.poly_sync_at}` : '';
+  // Balance — prefer live Polymarket data when fresh (< 45 s)
+  const live      = state.polyLive;
+  const liveFresh = live.configured && live.positions && (Date.now() - live.ts) < 45000;
+  const cashBalance  = Number(ov.bankroll || 0);
+  const portfolioVal = liveFresh ? live.portfolio_value : (ov.portfolio_value || 0);
+  const totalBalance = cashBalance + portfolioVal;
+
+  $('heroBankroll').textContent = liveFresh ? moneyPlain(totalBalance) : (cashBalance > 0 ? moneyPlain(cashBalance) : '—');
+  const syncTime = (liveFresh && live.synced_at) ? ` · Polymarket ${live.synced_at}` : (ov.poly_sync_at ? ` · Polymarket ${ov.poly_sync_at}` : '');
   $('heroSubtitle').textContent = `${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades${syncTime}`;
+
+  // Balance breakdown — cash + open positions + unrealised P&L
+  const breakdown = $('balanceBreakdown');
+  if (liveFresh && (portfolioVal > 0 || live.unrealised_pnl !== 0)) {
+    const upnl = live.unrealised_pnl || 0;
+    breakdown.style.display = '';
+    breakdown.innerHTML = `
+      <div class="brow"><span class="bl">Cash balance</span><span class="bv">${moneyPlain(cashBalance)}</span></div>
+      <div class="brow"><span class="bl">Open positions (${live.position_count || 0})</span><span class="bv">${moneyPlain(portfolioVal)}</span></div>
+      <div class="brow"><span class="bl">Unrealised P&amp;L</span><span class="bv ${pnlClass(upnl)}">${money(upnl)}</span></div>
+      <div class="brow" style="border-color:rgba(255,255,255,.12)"><span class="bl" style="color:var(--soft)">Total assets</span><span class="bv">${moneyPlain(totalBalance)}</span></div>`;
+  } else {
+    breakdown.style.display = 'none';
+  }
+
   $('metricDay').textContent = money(ov.pnl_today || 0);
   $('metricDay').className = `value ${pnlClass(ov.pnl_today)}`;
   $('metricTotal').textContent = money(ov.pnl_total || 0);
@@ -458,12 +515,12 @@ function renderOverview() {
   $('metricOpen').textContent = String(ov.open_positions || openList.length || 0);
   $('metricOpenSub').textContent = `Exposure ${moneyPlain(ov.open_exposure || 0)}`;
 
-  // Portfolio value from Polymarket
-  const portfolioVal = ov.portfolio_value || 0;
-  $('metricPortfolio').textContent = moneyPlain(portfolioVal);
-  $('metricPortfolioSub').textContent = portfolioVal > 0
-    ? `Invested ${moneyPlain(ov.total_invested || 0)}`
-    : (openList.length ? 'Fetching…' : 'No open positions');
+  // Portfolio metric card
+  $('metricPortfolio').textContent = portfolioVal > 0 ? moneyPlain(portfolioVal) : (cashBalance > 0 ? moneyPlain(cashBalance) : '—');
+  $('metricPortfolioSub').textContent = liveFresh
+    ? `Invested ${moneyPlain(live.total_invested || 0)}`
+    : (portfolioVal > 0 ? `Invested ${moneyPlain(ov.total_invested || 0)}`
+      : (openList.length ? 'Fetching from Polymarket…' : 'No open positions'));
 
   const upnlVal = ov.unrealised_pnl || 0;
   const heroBadges = [
@@ -694,6 +751,15 @@ async function fetchJSON(url) {
   return res.json();
 }
 
+async function fetchPolyLive() {
+  try {
+    const data = await fetchJSON('/api/polymarket_live');
+    state.polyLive = {...data, ts: Date.now()};
+  } catch (err) {
+    console.warn('polyLive fetch error:', err);
+  }
+}
+
 async function refresh() {
   try {
     const [overview, positions, signals, learning, strategies, settings] = await Promise.all([
@@ -713,7 +779,9 @@ async function refresh() {
       state.strategies = {strategies: learning.strategy_stats};
     }
     state.settings = settings || {};
+    // Render immediately with internal data, then update with live Polymarket data
     renderAll();
+    fetchPolyLive().then(() => { renderOverview(); renderLivePositions(); });
   } catch (err) {
     $('liveDot').style.background = 'var(--warn)';
     $('liveText').textContent = 'Load error';
