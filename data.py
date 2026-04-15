@@ -256,6 +256,18 @@ def fetch_current_price(token_id: str) -> Optional[float]:
         return None
 
 
+def fetch_order_book(token_id: str) -> dict:
+    """
+    Order book (bids/asks) для YES-токена.
+    Возвращает {"bids": [...], "asks": [...]} или {} если недоступно.
+    Каждый уровень: {"price": float, "size": float}.
+    """
+    raw = _safe_get(f"{CLOB}/book", {"token_id": token_id})
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
 # ── Parsers ───────────────────────────────────────────────────────────────────
 
 def _parse_market(m: dict) -> Optional[Market]:

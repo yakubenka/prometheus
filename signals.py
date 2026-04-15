@@ -18,7 +18,8 @@ import requests
 from anthropic import Anthropic
 
 from config import cfg
-from data import Market, fetch_market_price_history
+from data import Market, fetch_market_price_history, fetch_order_book
+from econ_calendar import imminent_release_for
 
 if TYPE_CHECKING:
     from intel import IntelPipeline
@@ -46,8 +47,9 @@ _CONF_KELLY = {
     "low":    0.40,
 }
 
-_AI_SIGNAL_NAMES = {"ai_guard", "sentiment", "calibration", "base_rate"}
-_NON_AI_SIGNAL_NAMES = {"momentum", "consensus", "predictit", "volume_spike"}
+_AI_SIGNAL_NAMES = {"ai_guard", "sentiment"}
+_NON_AI_SIGNAL_NAMES = {"momentum", "consensus", "predictit", "volume_spike",
+                        "book_depth", "calibration", "base_rate"}
 
 
 def get_domain_min_edge(tags: list, default: float = 0.05) -> float:
@@ -164,13 +166,14 @@ def _detect_volume_anomaly(market: Market) -> Optional[Signal]:
 class SignalEngine:
     DEFAULT_WEIGHTS = {
         "momentum":     0.20,
-        "consensus":    0.34,
-        "predictit":    0.24,
-        "volume_spike": 0.08,
+        "consensus":    0.30,
+        "predictit":    0.22,
+        "volume_spike": 0.06,
+        "book_depth":   0.08,
+        "calibration":  0.06,
+        "base_rate":    0.06,
         "ai_guard":     0.14,
-        "sentiment":    0.06,
-        "calibration":  0.04,
-        "base_rate":    0.04,
+        "sentiment":    0.04,
     }
 
     def __init__(self, ai: Optional[Anthropic], intel: Optional["IntelPipeline"] = None) -> None:
@@ -217,13 +220,16 @@ class SignalEngine:
 
     def _run_non_ai_parallel(self, market: Market) -> list[Signal]:
         tasks = {
-            "momentum": lambda: self._momentum(market),
-            "consensus": lambda: self._consensus(market),
-            "predictit": lambda: self._predictit(market),
-            "volume_spike": lambda: _detect_volume_anomaly(market) or Signal("volume_spike", market.yes_price, 0.10, "NEUTRAL", "no anomaly"),
+            "momentum":    lambda: self._momentum(market),
+            "consensus":   lambda: self._consensus(market),
+            "predictit":   lambda: self._predictit(market),
+            "volume_spike":lambda: _detect_volume_anomaly(market) or Signal("volume_spike", market.yes_price, 0.10, "NEUTRAL", "no anomaly"),
+            "book_depth":  lambda: self._book_depth(market),
+            "calibration": lambda: self._calibration(market),
+            "base_rate":   lambda: self._base_rate(market),
         }
         results: dict[str, Signal] = {}
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=7) as executor:
             futures = {executor.submit(fn): name for name, fn in tasks.items()}
             for future in as_completed(futures, timeout=20):
                 name = futures[future]
@@ -283,6 +289,88 @@ class SignalEngine:
         except Exception as e:
             log.debug(f"PredictIt error: {e}")
             return Signal("predictit", market.yes_price, 0.10, "NEUTRAL", "error")
+
+    def _book_depth(self, market: Market) -> Signal:
+        """
+        Дисбаланс стакана заявок YES-токена из CLOB.
+        Большой bid-side → покупатели давят вверх → YES.
+        """
+        token_id = market.token_id_yes
+        if not token_id:
+            return Signal("book_depth", market.yes_price, 0.10, "NEUTRAL", "no token_id")
+        try:
+            book = fetch_order_book(token_id)
+            if not book:
+                return Signal("book_depth", market.yes_price, 0.10, "NEUTRAL", "no book data")
+            bids = book.get("bids", [])
+            asks = book.get("asks", [])
+            bid_depth = sum(float(b.get("size", 0)) for b in bids[:5])
+            ask_depth = sum(float(a.get("size", 0)) for a in asks[:5])
+            total = bid_depth + ask_depth
+            if total < 100:
+                return Signal("book_depth", market.yes_price, 0.10, "NEUTRAL", "insufficient depth")
+            imbalance = (bid_depth - ask_depth) / total
+            label = f"bid/ask={bid_depth:.0f}/{ask_depth:.0f} imb={imbalance:+.1%}"
+            if imbalance > 0.30:
+                conf = min(0.70, 0.40 + imbalance * 0.50)
+                return Signal("book_depth", market.yes_price, conf, "YES", label)
+            if imbalance < -0.30:
+                conf = min(0.70, 0.40 + abs(imbalance) * 0.50)
+                return Signal("book_depth", market.yes_price, conf, "NO", label)
+            return Signal("book_depth", market.yes_price, 0.20, "NEUTRAL", label)
+        except Exception as e:
+            log.debug(f"Book depth error: {e}")
+            return Signal("book_depth", market.yes_price, 0.10, "NEUTRAL", "error")
+
+    def _calibration(self, market: Market) -> Signal:
+        """
+        Favourite-longshot bias: ставки < 15% переоценены рынком,
+        тяжёлые фавориты > 85% — недооценены.
+        """
+        p = market.yes_price
+        if p < 0.12:
+            adj = round(p * 0.75, 3)
+            return Signal("calibration", adj, 0.50, "NO",  f"longshot overpriced {p:.2f}→{adj:.2f}")
+        if p < 0.20:
+            adj = round(p * 0.88, 3)
+            return Signal("calibration", adj, 0.35, "NO",  f"longshot bias {p:.2f}→{adj:.2f}")
+        if p > 0.88:
+            adj = round(min(0.97, p * 1.05), 3)
+            return Signal("calibration", adj, 0.50, "YES", f"favorite underpriced {p:.2f}→{adj:.2f}")
+        if p > 0.80:
+            adj = round(min(0.95, p * 1.03), 3)
+            return Signal("calibration", adj, 0.35, "YES", f"favorite bias {p:.2f}→{adj:.2f}")
+        return Signal("calibration", p, 0.15, "NEUTRAL", "no bias in [0.20, 0.80]")
+
+    def _base_rate(self, market: Market) -> Signal:
+        """
+        Базовые вероятности по типу вопроса + блокировка перед экономическими релизами.
+        """
+        # Экономический релиз в течение 2h → не торговать
+        release = imminent_release_for(market.question, market.tags, hours=2.0)
+        if release:
+            return Signal("base_rate", market.yes_price, 0.85, "NEUTRAL",
+                          f"pre-{release} blackout")
+
+        q_type = _classify_question(market.question)
+        p = market.yes_price
+        priors = {
+            "electoral":    0.50,
+            "economic":     0.45,
+            "geopolitical": 0.30,
+            "crypto":       0.50,
+            "binary":       0.50,
+            "general":      0.50,
+        }
+        prior = priors.get(q_type, 0.50)
+        # Лёгкое давление prior: 80% рынок, 20% base rate
+        adj = round(0.80 * p + 0.20 * prior, 3)
+        diff = adj - p
+        if abs(diff) < 0.01:
+            return Signal("base_rate", p, 0.20, "NEUTRAL", f"{q_type} prior ≈ market")
+        direction = "YES" if diff > 0 else "NO"
+        return Signal("base_rate", adj, 0.25, direction,
+                      f"{q_type} prior {prior:.0%} → {direction}")
 
     def _ai_guard(self, market: Market) -> Optional[Signal]:
         if cfg.ai_mode == "off" or not self.ai or self._ai_budget_remaining <= 0:
@@ -357,6 +445,16 @@ class SignalEngine:
         if vol:
             score += 4.0
 
+        calib = next((s for s in signals if s.name == "calibration"
+                      and s.direction == result.direction and s.confidence >= 0.35), None)
+        if calib:
+            score += 5.0
+
+        book = next((s for s in signals if s.name == "book_depth"
+                     and s.direction == result.direction and s.confidence >= 0.40), None)
+        if book:
+            score += 6.0
+
         if result.direction == "NEUTRAL":
             score -= 20.0
 
@@ -367,7 +465,8 @@ class SignalEngine:
             return 0
         return sum(
             1 for s in signals
-            if s.name in {"consensus", "predictit"} and s.direction == direction and s.confidence >= 0.35
+            if s.name in {"consensus", "predictit", "book_depth"}
+            and s.direction == direction and s.confidence >= 0.35
         )
 
     def _strategy_type(self, direction: str, signals: list[Signal], ai_used: bool) -> str:
