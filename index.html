@@ -178,9 +178,9 @@ a{color:inherit;text-decoration:none}
             <div class="sub" id="metricOpenSub">Exposure $0</div>
           </div>
           <div class="metric small">
-            <div class="label">Waiting for confirmation</div>
-            <div class="value" id="metricPending">0</div>
-            <div class="sub" id="metricPendingSub">Open / close checks</div>
+            <div class="label">Portfolio value</div>
+            <div class="value" id="metricPortfolio">$0</div>
+            <div class="sub" id="metricPortfolioSub">Current market value</div>
           </div>
         </div>
       </div>
@@ -206,6 +206,17 @@ a{color:inherit;text-decoration:none}
           <div class="alerts" id="alertsList"></div>
         </div>
       </div>
+    </div>
+
+    <div class="panel section" id="livePositionsSection" style="margin-top:18px;display:none">
+      <div class="section-head">
+        <div>
+          <div class="section-title">Open positions</div>
+          <div class="section-note" id="polySync">Synced with Polymarket</div>
+        </div>
+        <div id="polyBadge"></div>
+      </div>
+      <div class="list" id="livePositionsList"></div>
     </div>
 
     <div class="panel section" style="margin-top:18px">
@@ -378,28 +389,89 @@ function buildAlerts() {
   return alerts;
 }
 
+function renderLivePositions() {
+  const openList = state.positions.open || [];
+  const section  = $('livePositionsSection');
+  const list     = $('livePositionsList');
+  const syncEl   = $('polySync');
+  const badgeEl  = $('polyBadge');
+  const ov       = state.overview || {};
+
+  if (!openList.length) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+
+  const verified = openList.filter((p) => p.poly_verified).length;
+  syncEl.textContent = ov.poly_sync_at ? `Polymarket · ${ov.poly_sync_at}` : 'Synced with Polymarket';
+  badgeEl.innerHTML = verified === openList.length
+    ? statusBadge(`All ${verified} verified`, 'good')
+    : verified > 0 ? statusBadge(`${verified}/${openList.length} verified`, 'warn') : '';
+
+  list.innerHTML = openList.map((p) => {
+    const dir = p.direction || 'YES';
+    const pnlPctStr = p.pnl_pct ? ` (${(p.pnl_pct * 100).toFixed(1)}%)` : '';
+    return `
+    <div class="item">
+      <div class="item-top">
+        <div style="flex:1;min-width:0">
+          <div class="title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.question || 'Untitled market')}</div>
+          <div class="meta">
+            ${statusBadge(dir, dir === 'YES' ? 'good' : 'bad')}
+            ${p.poly_verified ? statusBadge('Polymarket ✓', 'good') : statusBadge('Unconfirmed', 'warn')}
+            <span>Status: ${esc(p.status || 'open')}</span>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
+          <div class="value-sm ${pnlClass(p.pnl)}">${pnlPctStr || moneyPlain(p.size || 0)}</div>
+        </div>
+      </div>
+      <div class="row2" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+        <div class="stat"><div class="sl">Entry</div><div class="sv">${pct(p.price || 0)}</div></div>
+        <div class="stat"><div class="sl">Current</div><div class="sv">${pct(p.current_price || 0)}</div></div>
+        <div class="stat"><div class="sl">Size</div><div class="sv">${moneyPlain(p.size || 0)}</div></div>
+        <div class="stat"><div class="sl">Type</div><div class="sv" style="font-size:13px">${esc(formatType(p.type || ''))}</div></div>
+      </div>
+      <div class="cta" style="margin-top:12px">
+        ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket</a>` : ''}
+        <button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\\'"))}')">Close</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderOverview() {
   const ov = state.overview || {};
   const openList = state.positions.open || [];
   const settings = state.settings || {};
-  const {total} = pendingCounts(openList);
+  const {pendingOpen, pendingClose, total} = pendingCounts(openList);
 
   $('heroBankroll').textContent = moneyPlain(ov.bankroll || 0);
-  $('heroSubtitle').textContent = `${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades`;
+  const syncTime = ov.poly_sync_at ? ` · Polymarket ${ov.poly_sync_at}` : '';
+  $('heroSubtitle').textContent = `${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades${syncTime}`;
   $('metricDay').textContent = money(ov.pnl_today || 0);
   $('metricDay').className = `value ${pnlClass(ov.pnl_today)}`;
   $('metricTotal').textContent = money(ov.pnl_total || 0);
   $('metricTotal').className = `value ${pnlClass(ov.pnl_total)}`;
   $('metricOpen').textContent = String(ov.open_positions || openList.length || 0);
   $('metricOpenSub').textContent = `Exposure ${moneyPlain(ov.open_exposure || 0)}`;
-  $('metricPending').textContent = String(total);
-  $('metricPendingSub').textContent = total ? 'Needs Polymarket confirmation' : 'Everything confirmed';
 
+  // Portfolio value from Polymarket
+  const portfolioVal = ov.portfolio_value || 0;
+  $('metricPortfolio').textContent = moneyPlain(portfolioVal);
+  $('metricPortfolioSub').textContent = portfolioVal > 0
+    ? `Invested ${moneyPlain(ov.total_invested || 0)}`
+    : (openList.length ? 'Fetching…' : 'No open positions');
+
+  const upnlVal = ov.unrealised_pnl || 0;
   const heroBadges = [
     statusBadge(ov.bot_running ? 'Online' : 'Offline', ov.bot_running ? 'good' : 'bad'),
     statusBadge(ov.dry_run ? 'Dry run' : 'Live', ov.dry_run ? '' : 'warn'),
     statusBadge(`Win rate ${pct(ov.win_rate || 0)}`),
-    statusBadge(`Unrealised ${money(ov.unrealised_pnl || 0)}`, pnlClass(ov.unrealised_pnl || 0) === 'positive' ? 'good' : pnlClass(ov.unrealised_pnl || 0) === 'negative' ? 'bad' : ''),
+    statusBadge(`Unrealised ${money(upnlVal)}`, pnlClass(upnlVal) === 'positive' ? 'good' : pnlClass(upnlVal) === 'negative' ? 'bad' : ''),
+    ...(ov.poly_sync_at ? [statusBadge(`Synced ${ov.poly_sync_at}`, 'good')] : []),
   ];
   $('heroBadges').innerHTML = heroBadges.join('');
 
@@ -428,6 +500,9 @@ function renderOverview() {
     </div>
   `).join('');
 
+  // Render live positions panel on overview
+  renderLivePositions();
+
   const signals = (state.signals.signals || []).slice(0, 5);
   $('entryIdeas').innerHTML = signals.length ? signals.map((s) => `
     <div class="item">
@@ -455,34 +530,38 @@ function renderPositions() {
   const openList = state.positions.open || [];
   const closedToday = state.positions.closed_today || [];
 
-  $('openPositions').innerHTML = openList.length ? openList.map((p) => `
+  $('openPositions').innerHTML = openList.length ? openList.map((p) => {
+    const dir = p.direction || 'YES';
+    const pnlPctStr = p.pnl_pct ? ` (${(p.pnl_pct * 100).toFixed(1)}%)` : '';
+    return `
     <div class="item">
       <div class="item-top">
         <div>
           <div class="title">${esc(p.question || 'Untitled market')}</div>
           <div class="meta">
-            <span>${esc(p.direction || '—')}</span>
+            ${statusBadge(dir, dir === 'YES' ? 'good' : 'bad')}
+            ${p.poly_verified ? statusBadge('Polymarket ✓', 'good') : statusBadge('Unconfirmed', 'warn')}
             <span>${esc(formatType(p.type || 'unknown'))}</span>
             <span>Status: ${esc(p.status || 'open')}</span>
           </div>
         </div>
         <div style="text-align:right">
           <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
-          <div class="value-sm">Size ${moneyPlain(p.size || 0)}</div>
+          <div class="value-sm ${pnlClass(p.pnl)}">${pnlPctStr || ('Size ' + moneyPlain(p.size || 0))}</div>
         </div>
       </div>
       <div class="row2">
         <div class="stat"><div class="sl">Entry</div><div class="sv">${pct(p.price || 0)}</div></div>
         <div class="stat"><div class="sl">Current</div><div class="sv">${pct(p.current_price || 0)}</div></div>
-        <div class="stat"><div class="sl">Age</div><div class="sv">${esc(p.age || 'now')}</div></div>
+        <div class="stat"><div class="sl">Size</div><div class="sv">${moneyPlain(p.size || 0)}</div></div>
         <div class="stat"><div class="sl">Token</div><div class="sv">${esc((p.token_id || '').slice(0, 10) || '—')}</div></div>
       </div>
       <div class="cta" style="margin-top:16px">
         <button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\\'"))}')">Close</button>
-        ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Open on Polymarket</a>` : ''}
+        ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket</a>` : ''}
       </div>
-    </div>
-  `).join('') : `<div class="empty">No open positions.</div>`;
+    </div>`;
+  }).join('') : `<div class="empty">No open positions.</div>`;
 
   $('closedToday').innerHTML = closedToday.length ? closedToday.map((p) => `
     <div class="item">

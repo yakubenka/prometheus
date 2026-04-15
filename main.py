@@ -1002,24 +1002,25 @@ class Prometheus:
             closed_today = [p for p in all_closed
                            if (p.closed_at or "")[:10] == datetime.now(timezone.utc).date().isoformat()]
 
+            # Portfolio snapshot из Polymarket (кэшированный, TTL 30с — без доп. HTTP запросов)
+            poly_snap   = self._poly_client.portfolio()
+            poly_by_tok = {pos.token_id: pos for pos in poly_snap.positions}
+
             def get_current_price(token_id: str) -> float:
-                """Текущая цена токена с Polymarket CLOB."""
+                """Текущая цена — из Polymarket кэша или запрос через клиент."""
                 if not token_id:
                     return 0.0
-                try:
-                    r = _r.get(
-                        "https://clob.polymarket.com/midpoint",
-                        params={"token_id": token_id},
-                        timeout=4,
-                    )
-                    if r.status_code == 200:
-                        return float(r.json().get("mid", 0))
-                except Exception:
-                    pass
-                return 0.0
+                poly_pos = poly_by_tok.get(token_id)
+                if poly_pos:
+                    return poly_pos.cur_price
+                price = self._poly_client.token_price(token_id)
+                return price if price else 0.0
 
             def calc_upnl(p, current_price: float) -> float:
-                """Unrealised P&L по текущей цене."""
+                """Unrealised P&L — приоритет данных Polymarket Data API."""
+                poly_pos = poly_by_tok.get(p.token_id or "")
+                if poly_pos:
+                    return round(poly_pos.unrealised_pnl, 2)
                 if current_price <= 0 or p.entry_price <= 0:
                     return 0.0
                 entry = p.entry_price if p.direction == "YES" else 1 - p.entry_price
@@ -1038,32 +1039,35 @@ class Prometheus:
                 return f"https://polymarket.com/markets?_s={q}"
 
             def fmt(p, fetch_price: bool = False):
+                poly_pos      = poly_by_tok.get(p.token_id or "") if p.token_id else None
                 current_price = get_current_price(p.token_id) if fetch_price and p.token_id else 0.0
                 upnl = calc_upnl(p, current_price) if fetch_price else (p.pnl or 0)
                 return {
-                    "id":           p.market_id,
-                    "question":     p.question,
-                    "direction":    p.direction,
-                    "price":        p.entry_price,
+                    "id":            p.market_id,
+                    "question":      p.question,
+                    "direction":     p.direction,
+                    "price":         p.entry_price,
                     "current_price": current_price,
-                    "size":         p.size_usd,
-                    "pnl":          upnl,
-                    "age":          "now",
-                    "tags":         p.tags,
-                    "status":       p.status,
-                    "type":         p.signal_type,
-                    "url":          polymarket_url(p),
-                    "slug":         getattr(p, "slug", "") or "",
-                    "token_id":     p.token_id or "",
+                    "size":          p.size_usd,
+                    "pnl":           upnl,
+                    "pnl_pct":       round(poly_pos.pnl_pct, 3) if poly_pos else 0.0,
+                    "poly_verified": poly_pos is not None,
+                    "age":           "now",
+                    "tags":          p.tags,
+                    "status":        p.status,
+                    "type":          p.signal_type,
+                    "url":           polymarket_url(p),
+                    "slug":          getattr(p, "slug", "") or "",
+                    "token_id":      p.token_id or "",
                 }
 
-            # Считаем unrealised P&L для открытых позиций
+            # Форматируем позиции (цены из Polymarket через кэш, без доп. запросов)
             open_formatted   = [fmt(p, fetch_price=True)  for p in open_pos]
             closed_formatted = [fmt(p, fetch_price=False) for p in closed_today]
             all_closed_fmt   = [fmt(p, fetch_price=False) for p in all_closed[-100:]]
 
-            # Суммарный unrealised P&L
-            total_upnl = sum(p["pnl"] for p in open_formatted)
+            # Суммарный unrealised P&L — из Polymarket Data API (точнее CLOB midpoint)
+            total_upnl = poly_snap.unrealised_pnl if poly_snap.positions else sum(p["pnl"] for p in open_formatted)
 
             # Smart money leaderboard
             sm_traders = []
@@ -1098,7 +1102,10 @@ class Prometheus:
                     "total_trades":      snap["total_trades"],
                     "open_positions":    snap["open_positions"],
                     "open_exposure":     snap["open_exposure"],
-                    "bankroll":          cfg.bankroll,
+                    "bankroll":          round(self._real_bankroll, 2),
+                    "portfolio_value":   round(poly_snap.positions_value, 2),
+                    "total_invested":    round(poly_snap.total_invested, 2),
+                    "poly_sync_at":      datetime.now(timezone.utc).strftime("%H:%M UTC"),
                     "daily_loss_used":   snap["daily_loss_pct"],
                     "signals_today":     self._daily_signals,
                     "smart_money_today": self._daily_sm_alerts,
@@ -1131,7 +1138,12 @@ class Prometheus:
                 headers={"x-bot-key": cfg.dashboard_key},
                 timeout=8,
             )
-            log.info(f"📤 Данные отправлены в API | Unrealised P&L: ${total_upnl:+.2f}")
+            log.info(
+                f"📤 Данные отправлены в API | "
+                f"Bankroll ${self._real_bankroll:.2f} | "
+                f"uPnL ${total_upnl:+.2f} | "
+                f"Portfolio ${poly_snap.positions_value:.2f}"
+            )
         except Exception as e:
             log.debug(f"Push to API failed: {e}")
 
