@@ -26,6 +26,7 @@ Prometheus — Smart Money Tracker v3.5
 """
 from __future__ import annotations
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -43,9 +44,10 @@ GAMMA = "https://gamma-api.polymarket.com"
 _S    = requests.Session()
 _S.headers["User-Agent"] = "Prometheus/3.0"
 
-# Кэш outcomes по market_id
+# Кэш outcomes по market_id (protected by _OUTCOME_CACHE_LOCK for thread safety)
 _OUTCOME_CACHE: dict[str, Optional[str]] = {}
 _OUTCOME_CACHE_TS: dict[str, float] = {}
+_OUTCOME_CACHE_LOCK = threading.Lock()
 _OUTCOME_TTL = 3600              # 1 час — TTL записи
 _OUTCOME_CACHE_CLEANUP_INTERVAL = 300   # запускать чистку раз в 5 минут
 _OUTCOME_CACHE_LAST_CLEANUP: float = 0.0
@@ -108,10 +110,11 @@ def _maybe_cleanup_outcome_cache() -> None:
     now = time.time()
     if now - _OUTCOME_CACHE_LAST_CLEANUP < _OUTCOME_CACHE_CLEANUP_INTERVAL:
         return
-    expired = [mid for mid, ts in list(_OUTCOME_CACHE_TS.items()) if now - ts > _OUTCOME_TTL]
-    for mid in expired:
-        _OUTCOME_CACHE.pop(mid, None)
-        _OUTCOME_CACHE_TS.pop(mid, None)
+    with _OUTCOME_CACHE_LOCK:
+        expired = [mid for mid, ts in list(_OUTCOME_CACHE_TS.items()) if now - ts > _OUTCOME_TTL]
+        for mid in expired:
+            _OUTCOME_CACHE.pop(mid, None)
+            _OUTCOME_CACHE_TS.pop(mid, None)
     if expired:
         log.debug(f"Outcome cache cleanup: удалено {len(expired)} просроченных записей")
     _OUTCOME_CACHE_LAST_CLEANUP = now
@@ -125,9 +128,10 @@ def _fetch_market_outcome(market_id: str) -> Optional[str]:
     """
     _maybe_cleanup_outcome_cache()
     now = time.time()
-    if market_id in _OUTCOME_CACHE:
-        if now - _OUTCOME_CACHE_TS.get(market_id, 0) < _OUTCOME_TTL:
-            return _OUTCOME_CACHE[market_id]
+    with _OUTCOME_CACHE_LOCK:
+        if market_id in _OUTCOME_CACHE:
+            if now - _OUTCOME_CACHE_TS.get(market_id, 0) < _OUTCOME_TTL:
+                return _OUTCOME_CACHE[market_id]
 
     try:
         r = _S.get(f"{GAMMA}/markets/{market_id}", timeout=6)
@@ -140,12 +144,14 @@ def _fetch_market_outcome(market_id: str) -> Optional[str]:
         if winner:
             w = str(winner).upper()
             if w in ("YES", "1", "TRUE"):
-                _OUTCOME_CACHE[market_id] = "YES"
-                _OUTCOME_CACHE_TS[market_id] = now
+                with _OUTCOME_CACHE_LOCK:
+                    _OUTCOME_CACHE[market_id] = "YES"
+                    _OUTCOME_CACHE_TS[market_id] = now
                 return "YES"
             if w in ("NO", "0", "FALSE"):
-                _OUTCOME_CACHE[market_id] = "NO"
-                _OUTCOME_CACHE_TS[market_id] = now
+                with _OUTCOME_CACHE_LOCK:
+                    _OUTCOME_CACHE[market_id] = "NO"
+                    _OUTCOME_CACHE_TS[market_id] = now
                 return "NO"
 
         # По финальной цене
@@ -162,13 +168,15 @@ def _fetch_market_outcome(market_id: str) -> Optional[str]:
                     result = "NO"
                 else:
                     result = None
-                _OUTCOME_CACHE[market_id] = result
-                _OUTCOME_CACHE_TS[market_id] = now
+                with _OUTCOME_CACHE_LOCK:
+                    _OUTCOME_CACHE[market_id] = result
+                    _OUTCOME_CACHE_TS[market_id] = now
                 return result
 
         # Рынок ещё открыт
-        _OUTCOME_CACHE[market_id] = None
-        _OUTCOME_CACHE_TS[market_id] = now
+        with _OUTCOME_CACHE_LOCK:
+            _OUTCOME_CACHE[market_id] = None
+            _OUTCOME_CACHE_TS[market_id] = now
         return None
 
     except Exception as e:
