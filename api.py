@@ -82,6 +82,7 @@ def _client_ip(request: Request) -> str:
 
 _MARKET_ID_RE = re.compile(r'^[0-9a-zA-Z_\-]{1,150}$')
 
+POLY_FUNDER  = os.environ.get("POLYMARKET_FUNDER", "")
 API_KEY      = os.environ.get("DASHBOARD_API_KEY", "")
 MANUAL_CLOSE_KEY = os.environ.get("MANUAL_CLOSE_KEY", "")
 DATABASE_URL = (
@@ -324,8 +325,10 @@ def overview(request: Request):
         "bot_running": _alive(), "dry_run": True,
         "pnl_today": 0, "pnl_total": 0, "unrealised_pnl": 0,
         "win_rate": 0, "total_trades": 0, "open_positions": 0,
-        "open_exposure": 0, "bankroll": float(os.environ.get("BANKROLL","100")),
+        "open_exposure": 0, "bankroll": float(os.environ.get("BANKROLL", "100")),
+        "portfolio_value": 0, "total_invested": 0, "poly_sync_at": None,
         "daily_loss_used": 0, "signals_today": 0, "smart_money_today": 0,
+        "poly_configured": bool(POLY_FUNDER),
     }
 
 @app.get("/api/signals")
@@ -458,6 +461,79 @@ def overview_recalc():
         "total_trades": len(history),
         "win_rate":     win_rate,
     }
+
+_poly_live_cache: dict = {"data": None, "ts": 0.0}
+_POLY_LIVE_TTL = 15  # seconds — server-side cache to avoid hammering Polymarket
+
+@app.get("/api/polymarket_live")
+def polymarket_live(request: Request):
+    """
+    Live position data fetched directly from Polymarket Data API.
+    Server-side cached for 15 s. Requires POLYMARKET_FUNDER env var.
+    Returns positions with real-time cur_price, cashPnl, percentPnl.
+    """
+    if _rate_limited(_client_ip(request), limit=30, window=60):
+        raise HTTPException(429, "Too many requests")
+
+    if not POLY_FUNDER:
+        return {
+            "configured": False, "positions": [], "portfolio_value": 0,
+            "total_invested": 0, "unrealised_pnl": 0, "position_count": 0,
+        }
+
+    now = time.time()
+    if _poly_live_cache["data"] and now - _poly_live_cache["ts"] < _POLY_LIVE_TTL:
+        return _poly_live_cache["data"]
+
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://data-api.polymarket.com/positions",
+            params={"user": POLY_FUNDER, "sizeThreshold": "0.01"},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            cached = _poly_live_cache["data"]
+            return cached or {"configured": True, "error": f"HTTP {r.status_code}", "positions": []}
+
+        positions = []
+        for item in r.json():
+            try:
+                size = float(item.get("size", 0))
+                if size < 0.01:
+                    continue
+                positions.append({
+                    "token_id":      str(item.get("asset") or item.get("token_id", "")),
+                    "market_id":     str(item.get("conditionId", "")),
+                    "question":      str(item.get("title", "")),
+                    "outcome":       str(item.get("outcome", "")).upper(),
+                    "size":          round(size, 4),
+                    "avg_price":     round(float(item.get("avgPrice", 0)), 4),
+                    "cur_price":     round(float(item.get("curPrice", 0)), 4),
+                    "initial_value": round(float(item.get("initialValue", 0)), 2),
+                    "current_value": round(float(item.get("currentValue", 0)), 2),
+                    "pnl":           round(float(item.get("cashPnl", 0)), 2),
+                    "pnl_pct":       round(float(item.get("percentPnl", 0)), 4),
+                })
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        result = {
+            "configured":      True,
+            "positions":       positions,
+            "portfolio_value": round(sum(p["current_value"] for p in positions), 2),
+            "total_invested":  round(sum(p["initial_value"] for p in positions), 2),
+            "unrealised_pnl":  round(sum(p["pnl"] for p in positions), 2),
+            "position_count":  len(positions),
+            "synced_at":       datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
+        }
+        _poly_live_cache["data"] = result
+        _poly_live_cache["ts"] = now
+        return result
+    except Exception as e:
+        print(f"polymarket_live error: {e}")
+        cached = _poly_live_cache["data"]
+        return cached or {"configured": True, "error": str(e)[:120], "positions": []}
 
 @app.get("/api/smart_money")
 def smart_money():
