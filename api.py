@@ -179,8 +179,12 @@ INDEX_PATH = os.path.join(os.path.dirname(__file__), "index.html")
 
 # ── In-memory fallback ─────────────────────────────────────────────────────────
 _mem: dict = {}
+_MEM_MAX_KEYS = 100   # защита от неограниченного роста
 
 def store_set(key: str, value):
+    if key not in _mem and len(_mem) >= _MEM_MAX_KEYS:
+        oldest = next(iter(_mem))
+        del _mem[oldest]
     _mem[key] = value
     db_set(key, value if isinstance(value, dict) else {"_list": value})
 

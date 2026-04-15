@@ -196,12 +196,14 @@ def enrich_trades_with_outcomes(trades: list[Trade]) -> list[Trade]:
 
     log.debug(f"Enriching outcomes for {len(missing)} markets...")
 
+    from config import cfg as _cfg
+
     enriched_map: dict[str, Optional[str]] = {}
     for mid in list(missing)[:50]:   # максимум 50 запросов
         outcome = _fetch_market_outcome(mid)
         if outcome:
             enriched_map[mid] = outcome
-        time.sleep(0.05)  # 50ms между запросами
+        time.sleep(_cfg.enrich_request_interval)
 
     # Применяем outcomes
     result = []

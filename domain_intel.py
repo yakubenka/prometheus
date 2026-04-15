@@ -236,7 +236,11 @@ class DomainPrior:
                 }
                 for d, s in self._stats.items()
             }
-            self._path.write_text(json.dumps(data, indent=2))
+            # Атомарная запись: сначала во временный файл, потом rename.
+            # Предотвращает порчу файла при падении процесса в середине записи.
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2))
+            tmp.replace(self._path)
         except Exception as e:
             log.error(f"DomainPrior save error: {e}")
 
