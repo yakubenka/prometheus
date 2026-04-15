@@ -10,6 +10,7 @@ import json
 import logging
 import hashlib
 import os
+import re
 from dataclasses import dataclass, asdict
 from datetime import datetime, date, timezone
 from pathlib import Path
@@ -22,9 +23,34 @@ REASON_DAILY_LOSS      = "daily_loss_limit_reached"
 REASON_MAX_POSITIONS   = "max_open_positions"
 REASON_DUPLICATE       = "duplicate_market"
 REASON_CORRELATED      = "correlated_exposure_limit"
+REASON_SEMANTIC_CORR   = "semantic_correlation_limit"
 REASON_SIZE_TOO_SMALL  = "size_below_minimum"
 REASON_SIZE_TOO_LARGE  = "size_above_maximum"
 REASON_BOT_PAUSED      = "bot_paused"
+
+# ── Semantic correlation helpers ───────────────────────────────────────────────
+
+_STOPWORDS = frozenset({
+    "will", "the", "a", "an", "in", "on", "at", "to", "for", "of", "and",
+    "or", "be", "by", "is", "are", "was", "were", "has", "have", "had",
+    "with", "that", "this", "it", "its", "from", "than", "more", "most",
+    "over", "under", "their", "which", "who", "what", "when", "where", "how",
+    "win", "wins", "lose", "lost", "get", "gets", "make", "made", "does",
+    "able", "into", "about", "after", "before", "reach", "least", "ever",
+    "than", "then", "would", "could", "should", "between",
+})
+
+_SEMANTIC_MIN_OVERLAP = 3   # минимум общих токенов для признания семантической корреляции
+
+
+def _question_tokens(question: str) -> frozenset:
+    """
+    Извлечь значимые токены из вопроса.
+    Стоп-слова и короткие слова отбрасываем — остаются ключевые сущности.
+    Например: "Will Trump win the presidency?" → {"trump", "presidency"}
+    """
+    words = re.sub(r"[^a-z0-9 ]", "", question.lower()).split()
+    return frozenset(w for w in words if len(w) > 3 and w not in _STOPWORDS)
 
 
 @dataclass
@@ -134,7 +160,13 @@ class RiskManager:
         raw = bankroll * kelly * self.kelly_fraction
         return round(min(raw, self.max_position_usd), 2)
 
-    def check(self, market_id: str, size_usd: float, tags: list = None) -> RiskDecision:
+    def check(
+        self,
+        market_id: str,
+        size_usd:  float,
+        tags:      list = None,
+        question:  str  = "",
+    ) -> RiskDecision:
         tags = tags or []
 
         if self._paused:
@@ -148,6 +180,7 @@ class RiskManager:
         if any(a.market_id == market_id and a.action_type == "open_verify" for a in self._pending_actions):
             return self._log_deny(market_id, REASON_DUPLICATE, size_usd)
 
+        # Проверка по тегам
         if tags:
             correlated = sum(
                 p.size_usd for p in self.open_positions
@@ -155,6 +188,18 @@ class RiskManager:
             )
             if correlated + size_usd > self.max_correlated_usd:
                 return self._log_deny(market_id, REASON_CORRELATED, size_usd)
+
+        # Семантическая проверка корреляции: ловит тематическое пересечение,
+        # которое теги пропускают (напр. "Trump wins presidency" + "Republicans win Senate")
+        if question:
+            new_tokens = _question_tokens(question)
+            if new_tokens:
+                sem_correlated = sum(
+                    p.size_usd for p in self.open_positions
+                    if len(new_tokens & _question_tokens(p.question)) >= _SEMANTIC_MIN_OVERLAP
+                )
+                if sem_correlated + size_usd > self.max_correlated_usd:
+                    return self._log_deny(market_id, REASON_SEMANTIC_CORR, size_usd)
 
         if size_usd < 1.0:
             return self._log_deny(market_id, REASON_SIZE_TOO_SMALL, size_usd)

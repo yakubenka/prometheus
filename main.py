@@ -634,7 +634,8 @@ class Prometheus:
             if not self.risk.snapshot()["can_trade"]:
                 break
             decision = self.risk.check(sig.market_id, sig.our_size,
-                                        list(sig.wallet.specializations))
+                                        list(sig.wallet.specializations),
+                                        question=sig.question)
             if not decision.allowed:
                 log.info(f"SM risk block: {decision.reason}")
                 continue
@@ -859,7 +860,8 @@ class Prometheus:
 
             size = min(cfg.max_pos_usd, max(1.0, size))
 
-            decision = self.risk.check(market.id, size, list(market.tags))
+            decision = self.risk.check(market.id, size, list(market.tags),
+                                       question=market.question)
             if not decision.allowed:
                 log.info(f"AI risk block: {decision.reason}")
                 continue
@@ -989,7 +991,8 @@ class Prometheus:
             if size < 0.50:
                 continue
 
-            decision = self.risk.check(market.id, size, list(market.tags))
+            decision = self.risk.check(market.id, size, list(market.tags),
+                                       question=market.question)
             if not decision.allowed:
                 continue
 
