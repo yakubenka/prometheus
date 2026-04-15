@@ -826,6 +826,25 @@ class Prometheus:
                 size = min(max(1.0, size), self._strategy_control.all_weak_min_usd)
                 log.info(f"  All primary strategies weak: minimal exploratory size ${size:.2f}")
 
+            # Time-to-close decay: короткий горизонт = выше execution/resolution риск
+            if market.end_date:
+                try:
+                    _end = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                    _days_left = (_end - datetime.now(timezone.utc)).total_seconds() / 86400
+                    if _days_left < 1:
+                        _time_mult = 0.30
+                    elif _days_left < 3:
+                        _time_mult = 0.55
+                    elif _days_left < 7:
+                        _time_mult = 0.75
+                    else:
+                        _time_mult = 1.0
+                    if _time_mult < 1.0:
+                        size = size * _time_mult
+                        log.info(f"  Time decay ×{_time_mult:.2f} ({_days_left:.1f}d left): ${size:.2f}")
+                except Exception:
+                    pass
+
             size = min(cfg.max_pos_usd, max(1.0, size))
 
             decision = self.risk.check(market.id, size, list(market.tags))
