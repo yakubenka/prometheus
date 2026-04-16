@@ -334,12 +334,13 @@ class Prometheus:
         signal_type: str,
         token_id: str | None,
         slug: str | None,
+        url: str = "",
         notify_kwargs: dict,
     ) -> None:
         if cfg.dry_run:
             self.risk.open(
                 market_id, question, direction, entry_price, size_usd,
-                tags, signal_type, token_id=token_id, slug=slug,
+                tags, signal_type, token_id=token_id, slug=slug, url=url,
             )
             self.tg.position_opened(**notify_kwargs)
             return
@@ -360,6 +361,7 @@ class Prometheus:
             signal_type=signal_type,
             token_id=token_id,
             slug=slug,
+            url=url,
             max_attempts=cfg.max_order_retries,
             interval_sec=cfg.open_verify_interval_sec,
         )
@@ -389,6 +391,7 @@ class Prometheus:
                     action.market_id, action.question, action.direction,
                     action.entry_price, action.size_usd, action.tags,
                     action.signal_type, token_id=action.token_id, slug=action.slug,
+                    url=getattr(action, 'url', ''),
                 )
                 notify_kwargs = self._pending_open_notifies.pop(action.market_id, None)
                 if notify_kwargs:
@@ -711,6 +714,7 @@ class Prometheus:
                 token_id_yes = sig.token_id if sig.direction == "YES" else None
                 token_id_no  = sig.token_id if sig.direction == "NO"  else None
 
+            _sm_url = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else "")
             if _execute(_Mkt(), sig.direction, decision.size_usd, sig.entry_price):
                 sm_trades += 1
                 self._register_open_after_execution(
@@ -723,6 +727,7 @@ class Prometheus:
                     signal_type="smart_money",
                     token_id=sig.token_id or None,
                     slug=sig.slug or None,
+                    url=_sm_url,
                     notify_kwargs={
                         "question": sig.question,
                         "direction": sig.direction,
@@ -734,7 +739,7 @@ class Prometheus:
                         "dry_run": cfg.dry_run,
                         "signals": None,
                         "signal_type": "smart_money",
-                        "url": (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
+                        "url": _sm_url,
                         "domain_mult": 1.0,
                         "timing": "",
                     },
@@ -974,6 +979,7 @@ class Prometheus:
                     signal_type=result.strategy_type,
                     token_id=token,
                     slug=market.slug,
+                    url=market.polymarket_url,
                     notify_kwargs={
                         "question": market.question,
                         "direction": result.direction,
@@ -1119,6 +1125,7 @@ class Prometheus:
                     signal_type="near_resolution",
                     token_id=token,
                     slug=market.slug,
+                    url=market.polymarket_url,
                     notify_kwargs={
                         "question": market.question,
                         "direction": direction,
@@ -1176,15 +1183,14 @@ class Prometheus:
                 return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
 
             def polymarket_url(p) -> str:
-                """Прямая ссылка на рынок Polymarket."""
+                """Ссылка на рынок: приоритет сохранённый URL → поиск по вопросу."""
                 import urllib.parse
-                slug = getattr(p, 'slug', None)
-                if slug:
-                    return f"https://polymarket.com/event/{slug}"
-                # Fallback: поиск
-                words = ' '.join((p.question or '').split()[:6])
-                q = urllib.parse.quote(words)
-                return f"https://polymarket.com/markets?_s={q}"
+                stored = getattr(p, 'url', '') or ''
+                if stored:
+                    return stored
+                # Fallback: поиск по полному тексту вопроса (никогда не 404)
+                q = urllib.parse.quote((p.question or '')[:120])
+                return f"https://polymarket.com/?s={q}"
 
             def fmt(p, fetch_price: bool = False):
                 poly_pos      = poly_by_tok.get(p.token_id or "") if p.token_id else None
