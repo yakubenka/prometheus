@@ -1234,6 +1234,14 @@ class Prometheus:
             # Learning stats
             learning_stats = self.learning.stats()
 
+            # Bankroll = стартовый капитал + реализованный P&L + unrealised P&L.
+            # Считаем здесь из уже готовых данных чтобы избежать timing-рассинхрона
+            # между _sync_balance() (вызывается раньше) и актуальным snap.
+            _realized   = snap["total_pnl"]        # сумма P&L закрытых позиций
+            _bankroll_ui = max(1.0, cfg.bankroll + _realized + total_upnl)
+            # Обновляем _real_bankroll чтобы Kelly sizing тоже видел актуальное значение
+            self._real_bankroll = _bankroll_ui
+
             payload = {
                 "overview": {
                     "bot_running":       True,
@@ -1245,7 +1253,7 @@ class Prometheus:
                     "total_trades":      snap["total_trades"],
                     "open_positions":    snap["open_positions"],
                     "open_exposure":     snap["open_exposure"],
-                    "bankroll":          round(self._real_bankroll, 2),
+                    "bankroll":          round(_bankroll_ui, 2),
                     "portfolio_value":   round(poly_snap.positions_value, 2),
                     "total_invested":    round(poly_snap.total_invested, 2),
                     "poly_sync_at":      datetime.now(timezone.utc).strftime("%H:%M UTC"),
