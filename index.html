@@ -73,6 +73,21 @@ a{color:inherit;text-decoration:none}
 .stat{padding:12px 0 0}
 .stat .sl{color:var(--muted);font-size:12px;margin-bottom:4px}
 .stat .sv{font-size:18px;letter-spacing:-.03em;font-weight:630}
+/* Compact position card */
+.pos-card{padding:12px 14px}
+.pos-tags{margin-top:5px;font-size:12px;color:var(--muted);display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.pos-pnl{text-align:right;flex-shrink:0}
+.pos-pnl .value-lg{font-size:19px;letter-spacing:-.03em;font-weight:650}
+.pos-pct{font-size:12px;color:var(--muted);margin-top:1px}
+.pos-stats{margin-top:9px;font-size:13px;color:var(--soft);display:flex;flex-wrap:wrap;gap:3px 0;align-items:center;border-top:1px solid rgba(255,255,255,.05);padding-top:8px}
+.ps-item{white-space:nowrap;display:inline-flex;align-items:baseline;gap:4px}
+.ps-l{font-size:11px;color:var(--muted)}
+.ps-sep{color:rgba(255,255,255,.14);margin:0 7px;font-size:12px;line-height:1}
+.pos-actions{margin-top:8px;display:flex;gap:12px;align-items:center}
+.pos-link{font-size:12px;color:var(--blue);opacity:.8}
+.pos-link:hover{opacity:1}
+.btn-close-sm{background:none;border:none;color:var(--bad);font-size:12px;cursor:pointer;padding:0;opacity:.75}
+.btn-close-sm:hover{opacity:1}
 .kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .kv .item{padding:14px}
 .table{width:100%;border-collapse:collapse}
@@ -448,32 +463,46 @@ function buildAlerts() {
 
 function posCard(p, warningLabel) {
   const dir = p.direction || 'YES';
-  const pnlPctStr = p.pnl_pct ? ` (${(p.pnl_pct * 100).toFixed(1)}%)` : '';
+  const hasPnl    = p.pnl != null;
+  const pnlPctStr = p.pnl_pct ? `${(p.pnl_pct * 100).toFixed(1)}%` : '';
+  const typeLabel = formatType(p.type || '');
+  const verTag    = warningLabel
+    ? `<span style="color:var(--bad)">${esc(warningLabel)}</span>`
+    : (p.poly_verified
+        ? `<span style="color:var(--good)">Polymarket ✓</span>`
+        : `<span style="color:var(--warn)">Unconfirmed</span>`);
+  const dirColor  = dir === 'YES' ? 'var(--good)' : 'var(--bad)';
+  const closeId   = p.id || p.market_id || '';
+  const closeQ    = (p.question || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const curVal    = p.current_value != null ? moneyPlain(p.current_value) : '—';
   return `
-  <div class="item">
+  <div class="item pos-card">
     <div class="item-top">
       <div style="flex:1;min-width:0">
-        <div class="title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.question || 'Untitled market')}</div>
-        <div class="meta">
-          ${statusBadge(dir, dir === 'YES' ? 'good' : 'bad')}
-          ${warningLabel ? statusBadge(warningLabel, 'bad') : (p.poly_verified ? statusBadge('Polymarket ✓', 'good') : statusBadge('Unconfirmed', 'warn'))}
-          <span>${esc(formatType(p.type || ''))}</span>
+        <div class="title" style="font-size:15px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(p.question || 'Untitled market')}</div>
+        <div class="pos-tags">
+          <span style="color:${dirColor};font-weight:600">${esc(dir)}</span>
+          ${verTag}
+          ${typeLabel ? `<span>${esc(typeLabel)}</span>` : ''}
         </div>
       </div>
-      <div style="text-align:right;flex-shrink:0">
-        <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
-        <div class="value-sm ${pnlClass(p.pnl)}">${pnlPctStr || moneyPlain(p.size || 0)}</div>
+      <div class="pos-pnl">
+        <div class="value-lg ${pnlClass(p.pnl)}">${hasPnl ? money(p.pnl) : moneyPlain(p.size || 0)}</div>
+        ${pnlPctStr ? `<div class="pos-pct ${pnlClass(p.pnl)}">${pnlPctStr}</div>` : ''}
       </div>
     </div>
-    <div class="row2" style="grid-template-columns:repeat(4,minmax(0,1fr))">
-      <div class="stat"><div class="sl">Entry</div><div class="sv">${pct(p.price || 0)}</div></div>
-      <div class="stat"><div class="sl">Current</div><div class="sv">${pct(p.current_price || 0)}</div></div>
-      <div class="stat"><div class="sl">Invested</div><div class="sv">${moneyPlain(p.size || 0)}</div></div>
-      <div class="stat"><div class="sl">Value now</div><div class="sv">${p.current_value != null ? moneyPlain(p.current_value) : '—'}</div></div>
+    <div class="pos-stats">
+      <span class="ps-item"><span class="ps-l">Entry</span> ${pct(p.price || 0)}</span>
+      <span class="ps-sep">·</span>
+      <span class="ps-item"><span class="ps-l">Now</span> ${pct(p.current_price || 0)}</span>
+      <span class="ps-sep">·</span>
+      <span class="ps-item"><span class="ps-l">In</span> ${moneyPlain(p.size || 0)}</span>
+      <span class="ps-sep">·</span>
+      <span class="ps-item"><span class="ps-l">Val</span> ${curVal}</span>
     </div>
-    <div class="cta" style="margin-top:12px">
-      ${p.url ? `<a class="btn secondary" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket</a>` : ''}
-      ${(p.id || p.market_id) && !warningLabel ? `<button class="btn danger" onclick="openCloseModal('${esc(p.id || p.market_id || '')}', '${esc((p.question || '').replace(/'/g, "\\'"))}')">Close</button>` : ''}
+    <div class="pos-actions">
+      ${p.url ? `<a class="pos-link" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket ↗</a>` : ''}
+      ${closeId && !warningLabel ? `<button class="btn-close-sm" onclick="openCloseModal('${esc(closeId)}', '${closeQ}')">Close position</button>` : ''}
     </div>
   </div>`;
 }
