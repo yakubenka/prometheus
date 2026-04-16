@@ -270,12 +270,10 @@ class Prometheus:
                 self._check_risk_alerts()
                 self._trade_cycle()
 
-                # Breaking news триггер — проверяем каждый цикл
-                # Если есть горячая новость и прошло >3 мин с последнего breaking цикла
-                breaking = self.intel.breaking_news(hours=0.1)  # последние 6 минут
+                # Breaking news триггер — дополнительный цикл без TG-спама
+                breaking = self.intel.breaking_news(hours=0.1)
                 if breaking and (time.time() - self._last_breaking) > 180:
-                    log.info(f"🚨 Breaking news detected! Triggering immediate cycle...")
-                    self.tg.breaking([dp.title for dp in breaking[:3]])
+                    log.info(f"🚨 Breaking: {breaking[0].title[:60]} — extra cycle")
                     self._resolve_positions()
                     self._trade_cycle()
                     self._last_breaking = time.time()
@@ -443,7 +441,7 @@ class Prometheus:
             )
             if new_weights:
                 self.signals.update_weights(new_weights)
-                self.tg.weights_updated(new_weights)
+                log.info(f"Weights updated: {new_weights}")
             # Обновляем байесовский prior по доменам
             _tags = c.get("tags", [])
             _prev_mults = {
@@ -468,15 +466,7 @@ class Prometheus:
                     (old_m < 0.7 and new_m > 0.7)
                 )
                 if crossed and abs(new_m - old_m) > 0.05:
-                    st = self._domain_prior._stats.get(d)
-                    if st:
-                        self.tg.domain_shift(
-                            domain   = d,
-                            old_mult = old_m,
-                            new_mult = new_m,
-                            win_rate = st.win_rate,
-                            total    = st.total,
-                        )
+                    log.info(f"Domain shift: {d} {old_m:.2f}x → {new_m:.2f}x")
             change = self._strategy_control.record_close(
                 market_id=c["market_id"],
                 strategy_type=c.get("signal_type", "market_data"),
@@ -981,34 +971,24 @@ class Prometheus:
                     slug=market.slug,
                     url=market.polymarket_url,
                     notify_kwargs={
-                        "question": market.question,
-                        "direction": result.direction,
-                        "price": price,
-                        "size": decision.size_usd,
-                        "edge": result.edge,
-                        "confidence": result.confidence,
-                        "reasoning": result.reasoning,
-                        "dry_run": cfg.dry_run,
-                        "signals": result.signals,
-                        "signal_type": result.strategy_type,
-                        "url": market.polymarket_url,
-                        "domain_mult": mctx.domain_multiplier,
-                        "timing": mctx.timing_reason,
+                        "question":      market.question,
+                        "direction":     result.direction,
+                        "price":         price,
+                        "size":          decision.size_usd,
+                        "edge":          result.edge,
+                        "confidence":    result.confidence,
+                        "reasoning":     result.reasoning,
+                        "dry_run":       cfg.dry_run,
+                        "signals":       result.signals,
+                        "signal_type":   result.strategy_type,
+                        "url":           market.polymarket_url,
+                        "domain_mult":   mctx.domain_multiplier,
+                        "timing":        mctx.timing_reason,
+                        "question_type": result.question_type,
+                        "liq_mult":      _liq_mult,
+                        "liq_snap":      _liq_snap,
                     },
                 )
-                # Microstructure уведомление если сильный сигнал
-                if (mctx.microstructure and
-                    mctx.microstructure.confidence > 0.50 and
-                    mctx.microstructure.direction != "NEUTRAL"):
-                    action = ("confirmed" if mctx.microstructure.direction == result.direction
-                              else "contra")
-                    self.tg.microstructure_signal(
-                        question   = market.question,
-                        direction  = mctx.microstructure.direction,
-                        confidence = mctx.microstructure.confidence,
-                        reasoning  = mctx.microstructure.reasoning,
-                        action     = action,
-                    )
                 # Помечаем сигнал как исполненный
                 for s in reversed(self._signal_history):
                     if s.get("question") == market.question:
