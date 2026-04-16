@@ -232,6 +232,8 @@ class Prometheus:
         self._pending_open_notifies: dict[str, dict] = {}
         self._poly_client  = PolymarketClient(cfg.poly_funder)
         self._real_bankroll: float = cfg.bankroll   # обновляется в _sync_balance()
+        self._clob_usdc_balance:    float = 0.0     # реальный USDC в CLOB (с auth)
+        self._clob_balance_synced_at: float = 0.0   # timestamp последней синхронизации
         self._strategy_control = StrategyControl(
             cfg.logs_dir,
             min_trades=cfg.strategy_min_trades,
@@ -534,48 +536,98 @@ class Prometheus:
             except Exception as e:
                 log.warning(f"Intel error: {e}")
 
+    def _fetch_clob_balance(self) -> float:
+        """
+        Получить реальный USDC-баланс из Polymarket CLOB через авторизованный API.
+        Возвращает 0.0 если не настроен приватный ключ или произошла ошибка.
+        Вызывать не чаще раза в 5 минут — создание кредов занимает ~2 сек.
+        """
+        if not cfg.poly_key or not cfg.poly_funder:
+            return 0.0
+        try:
+            from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import ApiCreds
+            sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
+            kwargs: dict = {"key": cfg.poly_key, "chain_id": 137, "signature_type": sig_type}
+            if cfg.poly_funder.startswith("0x"):
+                kwargs["funder"] = cfg.poly_funder
+            client = ClobClient("https://clob.polymarket.com", **kwargs)
+            raw = client.create_or_derive_api_creds()
+            if isinstance(raw, dict):
+                raw = ApiCreds(
+                    api_key        = raw["api_key"],
+                    api_secret     = raw["api_secret"],
+                    api_passphrase = raw["api_passphrase"],
+                )
+            client.set_api_creds(raw)
+            bal = client.get_balance()
+            result = float(bal) if bal else 0.0
+            if result > 0:
+                log.info(f"💵 CLOB USDC balance: ${result:.2f}")
+            return result
+        except ImportError:
+            return 0.0
+        except Exception as e:
+            log.debug(f"_fetch_clob_balance error: {e}")
+            return 0.0
+
     def _sync_balance(self) -> None:
         """
         Синхронизировать реальный баланс с Polymarket.
 
-        Обновляет self._real_bankroll — используется для Kelly sizing.
-        Формула: initial_bankroll + realized_pnl + unrealised_pnl_from_polymarket
-
-        Данные из Polymarket Data API (без авторизации):
-        - Текущая рыночная стоимость каждой позиции
-        - Unrealised P&L
-        В реальном портфеле это даёт честную картину текущего капитала.
+        Приоритет источников (от лучшего к худшему):
+          1. Реальный USDC из CLOB (требует POLYMARKET_PRIVATE_KEY) — раз в 5 мин.
+             _real_bankroll = clob_usdc + текущая стоимость позиций
+          2. Оценка по Data API (публичный, не требует ключа):
+             _real_bankroll = cfg.bankroll + realized_pnl + unrealised_pnl
+          3. Только внутренний учёт (нет poly_funder):
+             _real_bankroll = cfg.bankroll + realized_pnl
         """
         risk_snap    = self.risk.snapshot()
         realized_pnl = risk_snap.get("total_pnl", 0.0)
+        now          = time.time()
 
+        # ── Приоритет 1: реальный USDC из CLOB (TTL = 5 мин) ─────────────────
+        if cfg.poly_key and cfg.poly_funder and (now - self._clob_balance_synced_at > 300):
+            usdc = self._fetch_clob_balance()
+            if usdc > 0:
+                self._clob_usdc_balance   = usdc
+                self._clob_balance_synced_at = now
+
+        if self._clob_usdc_balance > 0:
+            snap = self._poly_client.portfolio()
+            # Total assets = USDC cash in CLOB + current market value of positions
+            new_bankroll = max(1.0, self._clob_usdc_balance + snap.positions_value)
+            if abs(new_bankroll - self._real_bankroll) > 0.5:
+                log.info(
+                    f"💰 Bankroll (CLOB): ${self._real_bankroll:.2f} → ${new_bankroll:.2f} "
+                    f"(USDC ${self._clob_usdc_balance:.2f} + positions ${snap.positions_value:.2f})"
+                )
+            self._real_bankroll = new_bankroll
+            return
+
+        # ── Приоритет 2: оценка по Data API ───────────────────────────────────
         if not cfg.poly_funder:
-            # Нет адреса кошелька — считаем хотя бы по реализованному P&L
             self._real_bankroll = max(1.0, cfg.bankroll + realized_pnl)
             return
         try:
             snap = self._poly_client.portfolio()
-
             old_bankroll = self._real_bankroll
             self._real_bankroll = max(
                 1.0,
                 cfg.bankroll + realized_pnl + snap.unrealised_pnl,
             )
-
             if abs(self._real_bankroll - old_bankroll) > 0.5:
                 log.info(
-                    f"💰 Bankroll sync: ${old_bankroll:.2f} → ${self._real_bankroll:.2f} "
+                    f"💰 Bankroll (estimate): ${old_bankroll:.2f} → ${self._real_bankroll:.2f} "
                     f"(realized ${realized_pnl:+.2f}, uPnL ${snap.unrealised_pnl:+.2f}, "
-                    f"{snap.position_count} позиций на Polymarket)"
+                    f"{snap.position_count} позиций)"
                 )
-
-            # Сверяем количество позиций: внутри vs на Polymarket
             internal_count = len(self.risk.open_positions)
             poly_count = snap.position_count
             if internal_count != poly_count and poly_count > 0:
                 log.warning(
-                    f"⚠️ Рассинхронизация позиций: "
-                    f"внутри={internal_count}, на Polymarket={poly_count}"
+                    f"⚠️ Рассинхронизация позиций: внутри={internal_count}, Polymarket={poly_count}"
                 )
         except Exception as e:
             log.debug(f"_sync_balance error: {e}")
