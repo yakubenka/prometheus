@@ -26,7 +26,7 @@ from intel_ext import ExtendedIntelPipeline
 from screener import screen
 from position_review import PositionReviewer
 from domain_intel import DomainPrior, build_market_context, portfolio_kelly_size
-from liquidity import is_market_liquid
+from liquidity import is_market_liquid, check_liquidity, liquidity_size_mult
 from strategy_control import StrategyControl
 from polymarket_client import PolymarketClient
 
@@ -234,6 +234,7 @@ class Prometheus:
         self._real_bankroll: float = cfg.bankroll   # обновляется в _sync_balance()
         self._clob_usdc_balance:    float = 0.0     # реальный USDC в CLOB (с auth)
         self._clob_balance_synced_at: float = 0.0   # timestamp последней синхронизации
+        self._fast_cycles_remaining: int  = 0       # адаптивный интервал: короткие циклы после сделки
         self._strategy_control = StrategyControl(
             cfg.logs_dir,
             min_trades=cfg.strategy_min_trades,
@@ -279,7 +280,15 @@ class Prometheus:
                     self._trade_cycle()
                     self._last_breaking = time.time()
 
-                self._sleep(cfg.scan_interval)
+                # Адаптивный интервал: после сделки — 3 быстрых цикла (30 сек)
+                # В тихое время — обычный интервал из конфига
+                if self._fast_cycles_remaining > 0:
+                    interval = max(30, cfg.scan_interval // 3)
+                    self._fast_cycles_remaining -= 1
+                    log.info(f"⚡ Fast cycle, осталось {self._fast_cycles_remaining}")
+                else:
+                    interval = cfg.scan_interval
+                self._sleep(interval)
 
             except Exception as e:
                 log.error(f"Критическая ошибка: {e}", exc_info=True)
@@ -767,10 +776,9 @@ class Prometheus:
         candidates = screen(all_markets, top_n=top_n, fetch_kalshi=False)
         log.info(f"После скрининга: {len(candidates)} кандидатов для decision engine")
 
-        if cfg.enable_near_resolution:
-            near_res = self._find_near_resolution(all_markets)
-            if near_res:
-                log.info(f"Near-resolution markets: {len(near_res)}")
+        near_res = self._find_near_resolution(all_markets)
+        if near_res:
+            log.info(f"Near-resolution markets: {len(near_res)}")
 
         for cand in candidates:
             market = cand.market
@@ -869,17 +877,30 @@ class Prometheus:
                     f"(n={len(self.learning._records)} records)"
                 )
 
-            # Portfolio Kelly с domain multiplier
-            # Используем реальный bankroll из Polymarket (не статичный cfg.bankroll)
+            # Ликвидность: получаем снэпшот один раз — используем и для блокировки
+            # и для непрерывного Kelly-множителя (тонкий рынок → меньший размер)
+            _token_for_liq = (market.token_id_yes if result.direction == "YES"
+                              else market.token_id_no)
+            _liq_snap = check_liquidity(_token_for_liq) if _token_for_liq else None
+            if _liq_snap is not None and not _liq_snap.is_liquid:
+                log.info(f"  Liquidity block: {_liq_snap.reason}")
+                continue
+            _liq_mult = liquidity_size_mult(_liq_snap) if _liq_snap else 1.0
+            if _liq_mult < 0.99:
+                log.info(f"  Liquidity mult ×{_liq_mult:.2f} "
+                         f"(spread={_liq_snap.spread:.3f}, "
+                         f"depth=${min(_liq_snap.bid_depth_100, _liq_snap.ask_depth_100):.0f})")
+
+            # Portfolio Kelly с domain + liquidity multiplier
             size = portfolio_kelly_size(
-                ai_probability   = _cal_prob,
-                market_price     = market.yes_price,
-                direction        = result.direction,
-                bankroll         = self._real_bankroll,
-                kelly_fraction   = cfg.kelly_frac,
-                open_positions   = self.risk.open_positions,
-                max_position_usd = cfg.max_pos_usd,
-                domain_multiplier = mctx.total_size_multiplier,
+                ai_probability    = _cal_prob,
+                market_price      = market.yes_price,
+                direction         = result.direction,
+                bankroll          = self._real_bankroll,
+                kelly_fraction    = cfg.kelly_frac,
+                open_positions    = self.risk.open_positions,
+                max_position_usd  = cfg.max_pos_usd,
+                domain_multiplier = mctx.total_size_multiplier * _liq_mult,
             )
 
             # Плавный sizing по confidence (high=100%, medium=70%, low=40%)
@@ -936,12 +957,6 @@ class Prometheus:
                 continue
 
             price = market.yes_price if result.direction == "YES" else market.no_price
-
-            # Проверяем ликвидность order book
-            liquid, liq_reason = is_market_liquid(market, result.direction)
-            if not liquid:
-                log.info(f"  Liquidity block: {liq_reason}")
-                continue
 
             if _execute(market, result.direction, decision.size_usd, price):
                 token = (market.token_id_yes if result.direction == "YES"
@@ -1011,51 +1026,74 @@ class Prometheus:
         self.tg.cycle_summary(ai_trades, sm_trades, snap["daily_pnl"])
         self._push_to_api()
 
+        # После сделок — ускоряем следующие 3 цикла для мониторинга позиций
+        if ai_trades + sm_trades > 0:
+            self._fast_cycles_remaining = max(self._fast_cycles_remaining, 3)
+            log.info(f"⚡ {ai_trades + sm_trades} сделок → активируем быстрые циклы (×3)")
+
     def _find_near_resolution(self, markets: list) -> list:
         """
-        Near-Resolution Strategy: рынки близкие к резолюции.
-        Цена 85-97%, закрытие < 5 дней → высокий win rate, быстрый оборот.
-        Маленькая позиция (25% от обычного размера) — low risk.
+        Resolution Speed Arbitrage: рынки близкие к резолюции.
+
+        Логика:
+        - Цена 80–97% YES (или 3–20% → торгуем NO) — рынок "почти решён"
+        - Закрытие через 0.5–7 дней — достаточно времени для входа
+        - Kelly × 30% — консервативный размер (высокая вероятность, но не 100%)
+        - Лимит: не более 3 near-resolution позиций одновременно
+
+        Зачем работает: маркет-мейкеры ставят цены inefficiently у resolution,
+        создавая небольшие но стабильные арбитражные возможности.
         """
+        # Лимит: не перегружаем портфель near-res позициями
+        MAX_NEAR_RES = 3
+        current_near_res = sum(
+            1 for p in self.risk.open_positions
+            if getattr(p, "signal_type", "") == "near_resolution"
+        )
+        if current_near_res >= MAX_NEAR_RES:
+            return []
+
         results = []
         for market in markets:
-            # Цена должна быть в зоне "почти решён"
-            if not (0.85 <= market.yes_price <= 0.97):
-                # Проверяем и NO сторону
-                if not (0.03 <= market.yes_price <= 0.15):
-                    continue
+            if len(results) + current_near_res >= MAX_NEAR_RES:
+                break
 
-            # Должно быть < 5 дней до закрытия
+            # Цена в зоне "почти решён" (расширили с 85% до 80%)
+            yes_near = 0.80 <= market.yes_price <= 0.97
+            no_near  = 0.03 <= market.yes_price <= 0.20
+            if not yes_near and not no_near:
+                continue
+
             if not market.end_date:
                 continue
             try:
-                end = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                end       = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
                 days_left = (end - datetime.now(timezone.utc)).total_seconds() / 86400
-                if not (0.5 < days_left < 5):
+                if not (0.5 < days_left < 7):          # расширили с 5 до 7 дней
                     continue
             except Exception:
                 continue
 
-            # Минимальный объём
             if market.volume_24h < cfg.min_volume * 2:
                 continue
 
-            # Не открываем если уже есть позиция
             if any(p.market_id == market.id for p in self.risk.open_positions):
                 continue
 
-            direction = "YES" if market.yes_price >= 0.85 else "NO"
-            # For NO: the NO token price = 1 - yes_price
-            price = market.yes_price if direction == "YES" else (1.0 - market.yes_price)
+            direction = "YES" if yes_near else "NO"
+            price     = market.yes_price if direction == "YES" else (1.0 - market.yes_price)
 
-            # Маленький размер — 25% от обычного Kelly
-            # 93% confident the near-resolution market resolves as priced
+            # Implied probability с поправкой на days_left:
+            # чем дальше до резолюции — тем меньше уверенность
+            # 1d: 0.93 | 3d: 0.90 | 7d: 0.86
+            implied_prob = round(max(0.82, 0.95 - days_left * 0.013), 3)
+
             size = self.risk.kelly_size(
-                ai_probability = 0.93,
+                ai_probability = implied_prob,
                 market_price   = market.yes_price,
                 direction      = direction,
-                bankroll       = self._real_bankroll,  # реальный баланс, не стартовый
-            ) * 0.25   # 25% of normal Kelly for safety
+                bankroll       = self._real_bankroll,
+            ) * 0.30   # 30% of normal Kelly (was 25%)
 
             if size < 0.50:
                 continue
@@ -1066,7 +1104,7 @@ class Prometheus:
                 continue
 
             log.info(f"  📍 Near-res: {market.question[:50]} "
-                     f"| {direction} @ {price:.3f} | {days_left:.1f}d left")
+                     f"| {direction} @ {price:.3f} p={implied_prob:.0%} | {days_left:.1f}d left")
 
             if _execute(market, direction, decision.size_usd, price):
                 token = (market.token_id_yes if direction == "YES"
@@ -1088,7 +1126,7 @@ class Prometheus:
                         "size": decision.size_usd,
                         "edge": 1.0 - price,
                         "confidence": "high",
-                        "reasoning": f"Near-resolution: {days_left:.1f}d left @ {price:.1%}",
+                        "reasoning": f"Near-resolution: {days_left:.1f}d left @ {price:.1%} p={implied_prob:.0%}",
                         "dry_run": cfg.dry_run,
                         "signal_type": "near_resolution",
                         "url": market.polymarket_url,
