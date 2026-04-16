@@ -390,39 +390,23 @@ class PositionResolver:
             return
         try:
             import urllib.parse as _up
-            slug = getattr(pos, 'slug', None)
-            if slug:
-                pm_url = f"https://polymarket.com/event/{slug}"
-            else:
-                q      = _up.quote((pos.question or '')[:100])
+            pm_url = getattr(pos, 'url', '') or ''
+            if not pm_url:
+                q      = _up.quote((pos.question or '')[:120])
                 pm_url = f"https://polymarket.com/?s={q}"
 
-            if hasattr(self.tg, "position_closed"):
-                self.tg.position_closed(
-                    question    = pos.question,
-                    direction   = pos.direction,
-                    entry_price = pos.entry_price,
-                    exit_price  = exit_price,
-                    size        = pos.size_usd,
-                    pnl         = pnl,
-                    outcome     = outcome,
-                    signal_type = pos.signal_type,
-                    url         = pm_url,
-                )
-            else:
-                icon   = "✅" if won else ("🛑" if outcome == "STOP_LOSS" else "❌")
-                result = "WIN" if won else ("STOP-LOSS" if outcome == "STOP_LOSS" else "LOSS")
-                pnl_s  = f"+${pnl:.2f}" if won else f"−${abs(pnl):.2f}"
-                msg = (
-                    f"{icon} *{result}*\n\n"
-                    f"*{pos.question[:70]}*\n\n"
-                    f"Ставка: *{pos.direction}*  |  Исход: *{outcome}*\n"
-                    f"P&L: *{pnl_s}*\n\n"
-                    f"🔗 [Polymarket]({pm_url})"
-                )
-                if loss_pct is not None:
-                    msg += f"\nПотери: *{loss_pct:.0%}*"
-                self.tg(msg)
+            self.tg.position_closed(
+                question    = pos.question,
+                direction   = pos.direction,
+                entry_price = pos.entry_price,
+                exit_price  = exit_price,
+                size        = pos.size_usd,
+                pnl         = pnl,
+                outcome     = outcome,
+                signal_type = pos.signal_type,
+                opened_at   = getattr(pos, 'opened_at', None),
+                url         = pm_url,
+            )
         except Exception as e:
             log.debug(f"Telegram notify error: {e}")
 
