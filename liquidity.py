@@ -86,6 +86,26 @@ def check_liquidity(token_id: str,
         return None
 
 
+def liquidity_size_mult(snap: LiquiditySnapshot) -> float:
+    """
+    Непрерывный множитель размера позиции по качеству ликвидности.
+    Используется в Kelly sizing ДО финального кэпа.
+
+    Spread penalty:  > 2% начинает снижать размер, линейно до 0.30 при 8%+
+    Depth bonus:     меньше $300 в стакане → снижаем размер
+    Итог:            хорошая ликвидность = 1.0, тонкий рынок = 0.20–0.50
+    """
+    # Штраф за широкий спред
+    spread_penalty = max(0.30, 1.0 - max(0.0, snap.spread - 0.02) * 11.67)
+
+    # Награда за глубину: $500+ = полный размер
+    min_depth = min(snap.bid_depth_100, snap.ask_depth_100)
+    depth_mult = min(1.0, min_depth / 500.0)
+
+    mult = round(spread_penalty * (0.40 + 0.60 * depth_mult), 3)
+    return max(0.20, mult)
+
+
 def is_market_liquid(market, direction: str,
                      min_depth_usd: float = 150.0) -> tuple[bool, str]:
     """
