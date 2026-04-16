@@ -69,6 +69,7 @@ class Position:
     signal_type:  str = "ai"
     token_id:     Optional[str] = None
     slug:         Optional[str] = None
+    url:          str = ""
 
 
 @dataclass
@@ -91,6 +92,7 @@ class PendingAction:
     reason:        str = ""
     target_price:  Optional[float] = None
     last_error:    str = ""
+    url:           str = ""
 
     def due(self, now_ts: float) -> bool:
         return now_ts >= self.next_retry_at
@@ -219,6 +221,7 @@ class RiskManager:
         signal_type: str  = "ai",
         token_id:    str  = None,
         slug:        str  = None,
+        url:         str  = "",
     ) -> Position:
         pos = Position(
             market_id   = market_id,
@@ -231,6 +234,7 @@ class RiskManager:
             signal_type = signal_type,
             token_id    = token_id,
             slug        = slug,
+            url         = url,
         )
         self._positions.append(pos)
         self._save()
@@ -279,6 +283,7 @@ class RiskManager:
         slug: str | None,
         max_attempts: int,
         interval_sec: int,
+        url: str = "",
     ) -> PendingAction:
         existing = next((a for a in self._pending_actions if a.market_id == market_id and a.action_type == "open_verify"), None)
         if existing:
@@ -299,6 +304,7 @@ class RiskManager:
             next_retry_at=0.0,
             created_at=datetime.now(timezone.utc).isoformat(),
             tags=tags or [],
+            url=url,
         )
         self._pending_actions.append(action)
         self._save()

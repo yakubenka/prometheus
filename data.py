@@ -54,7 +54,8 @@ class Market:
     token_id_no:  Optional[str]
     description:  str
     tags:         tuple          # immutable
-    slug:         Optional[str] = None   # для прямых ссылок на Polymarket
+    slug:         Optional[str] = None   # groupSlug (event level) → /event/{slug}
+    market_slug:  Optional[str] = None   # marketSlug (market level) → /event/{slug}/{market_slug}
 
     @property
     def spread(self) -> float:
@@ -65,22 +66,20 @@ class Market:
         """
         Ссылка на рынок Polymarket.
 
-        Polymarket URL структура:
-        - /event/{eventSlug}  — страница события. НО: Gamma API возвращает
-          marketSlug который отличается от eventSlug → часто 404.
-        - /?s={query}         — поиск. НИКОГДА не даёт 404, всегда находит рынок.
-
-        Используем поиск по полному названию вопроса — это надёжнее.
-        Если slug есть — пробуем /event/ первым, но это не гарантия.
+        Приоритет URL:
+        1. /event/{groupSlug}/{marketSlug} — наиболее конкретный, точно попадает
+           на нужный рынок внутри события.
+        2. /event/{groupSlug} — страница события (может содержать несколько рынков).
+        3. /?s={question}    — поиск по тексту вопроса. Никогда не даёт 404.
         """
         import urllib.parse
-        # Поиск по полному вопросу — никогда не 404
-        q = urllib.parse.quote(self.question[:100])
-        search_url = f"https://polymarket.com/?s={q}"
-        # Если есть slug — используем /event/ (может дать 404, но чаще работает)
+        if self.slug and self.market_slug:
+            return f"https://polymarket.com/event/{self.slug}/{self.market_slug}"
         if self.slug:
             return f"https://polymarket.com/event/{self.slug}"
-        return search_url
+        # Search fallback — always works, never 404
+        q = urllib.parse.quote(self.question[:120])
+        return f"https://polymarket.com/?s={q}"
 
     @staticmethod
     def _make_slug(question: str) -> str:
@@ -296,16 +295,10 @@ def _parse_market(m: dict) -> Optional[Market]:
         text = (m.get("question") or "") + " " + (m.get("description") or "")
         tags = _extract_tags(text.lower())
 
-        # Собираем все возможные slug поля из Gamma API
-        # groupSlug — slug родительского события (наиболее точный для /event/)
-        # marketSlug — slug самого рынка
-        # slug — общее поле
-        slug = (
-            m.get("groupSlug") or
-            m.get("marketSlug") or
-            m.get("slug") or
-            None
-        )
+        # groupSlug — slug родительского события → работает с /event/{groupSlug}
+        # marketSlug — slug конкретного рынка → даёт /event/{groupSlug}/{marketSlug}
+        group_slug  = m.get("groupSlug") or m.get("slug") or None
+        market_slug = m.get("marketSlug") or None
 
         return Market(
             id           = str(m.get("id") or m.get("conditionId") or ""),
@@ -318,7 +311,8 @@ def _parse_market(m: dict) -> Optional[Market]:
             token_id_no  = token_no,
             description  = str(m.get("description") or "")[:500],
             tags         = tags,
-            slug         = slug,
+            slug         = group_slug,
+            market_slug  = market_slug,
         )
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
         log.debug(f"Ошибка парсинга рынка: {e}")
