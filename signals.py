@@ -47,9 +47,9 @@ _CONF_KELLY = {
     "low":    0.40,
 }
 
-_AI_SIGNAL_NAMES = {"ai_guard", "sentiment"}
+_AI_SIGNAL_NAMES = {"ai_guard"}
 _NON_AI_SIGNAL_NAMES = {"momentum", "consensus", "predictit", "volume_spike",
-                        "book_depth", "calibration", "base_rate"}
+                        "book_depth", "calibration", "base_rate", "sentiment"}
 
 
 def get_domain_min_edge(tags: list, default: float = 0.05) -> float:
@@ -165,15 +165,15 @@ def _detect_volume_anomaly(market: Market) -> Optional[Signal]:
 
 class SignalEngine:
     DEFAULT_WEIGHTS = {
-        "momentum":     0.20,
-        "consensus":    0.30,
-        "predictit":    0.22,
+        "momentum":     0.18,
+        "consensus":    0.28,
+        "predictit":    0.20,
         "volume_spike": 0.06,
         "book_depth":   0.08,
         "calibration":  0.06,
         "base_rate":    0.06,
+        "sentiment":    0.06,
         "ai_guard":     0.14,
-        "sentiment":    0.04,
     }
 
     def __init__(self, ai: Optional[Anthropic], intel: Optional["IntelPipeline"] = None) -> None:
@@ -227,9 +227,10 @@ class SignalEngine:
             "book_depth":  lambda: self._book_depth(market),
             "calibration": lambda: self._calibration(market),
             "base_rate":   lambda: self._base_rate(market),
+            "sentiment":   lambda: self._sentiment(market),
         }
         results: dict[str, Signal] = {}
-        with ThreadPoolExecutor(max_workers=7) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(fn): name for name, fn in tasks.items()}
             for future in as_completed(futures, timeout=20):
                 name = futures[future]
@@ -372,6 +373,39 @@ class SignalEngine:
         return Signal("base_rate", adj, 0.25, direction,
                       f"{q_type} prior {prior:.0%} → {direction}")
 
+    def _sentiment(self, market: Market) -> Signal:
+        """
+        Новостной сентимент домена из intel pipeline (последние 4 часа).
+        70%+ позитивных новостей по домену → BULLISH → сигнал YES.
+        70%+ негативных → BEARISH → сигнал NO.
+        """
+        if not self.intel:
+            return Signal("sentiment", market.yes_price, 0.10, "NEUTRAL", "no intel")
+        try:
+            from domain_intel import get_domain_sentiment
+            domain = next(
+                (t for t in market.tags
+                 if t in {"crypto", "politics", "macro", "geopolitics", "sports", "tech"}),
+                None,
+            )
+            if not domain:
+                return Signal("sentiment", market.yes_price, 0.10, "NEUTRAL", "no domain tag")
+            ds = get_domain_sentiment(domain, self.intel.db)
+            if not ds or ds.signal == "NEUTRAL" or ds.news_count < 3:
+                n = ds.news_count if ds else 0
+                return Signal("sentiment", market.yes_price, 0.10, "NEUTRAL",
+                              f"{domain} neutral ({n} news)")
+            direction = "YES" if ds.signal == "BULLISH" else "NO"
+            nudge     = 0.02 * (1 if direction == "YES" else -1)
+            adj_score = round(max(0.05, min(0.95, market.yes_price + nudge)), 3)
+            return Signal(
+                "sentiment", adj_score, ds.confidence, direction,
+                f"{domain} {ds.signal.lower()} {ds.bullish_count}↑/{ds.bearish_count}↓ ({ds.news_count}n)",
+            )
+        except Exception as e:
+            log.debug(f"Sentiment signal error: {e}")
+            return Signal("sentiment", market.yes_price, 0.10, "NEUTRAL", "error")
+
     def _ai_guard(self, market: Market) -> Optional[Signal]:
         if cfg.ai_mode == "off" or not self.ai or self._ai_budget_remaining <= 0:
             return None
@@ -477,8 +511,21 @@ class SignalEngine:
         return "market_data"
 
     def _ensemble(self, market: Market, signals: list[Signal]) -> EnsembleResult:
-        no_data = {"no Kalshi match", "no PredictIt match", "error", "insufficient history", "no anomaly"}
-        active = [s for s in signals if not (s.direction == "NEUTRAL" and s.reasoning in no_data)]
+        no_data = {
+            "no Kalshi match", "no PredictIt match", "error",
+            "insufficient history", "no anomaly",
+            "no intel", "no domain tag",  # sentiment neutrals
+        }
+        # Также фильтруем нейтральный sentiment с маленьким числом новостей
+        active = [
+            s for s in signals
+            if not (
+                s.direction == "NEUTRAL" and (
+                    s.reasoning in no_data or
+                    (s.name == "sentiment" and s.confidence <= 0.10)
+                )
+            )
+        ]
         if not active:
             active = signals
 
@@ -529,6 +576,35 @@ class SignalEngine:
             signals=signals,
             reasoning=reasoning,
         )
+
+    def find_correlated_markets(
+        self, markets: list[Market], min_overlap: float = 0.30, min_spread: float = 0.12
+    ) -> list[tuple[Market, Market, float]]:
+        """
+        Ищет пары рынков с похожими вопросами но значительной разницей цен.
+        Используется для кросс-маркет арбитража и уведомлений.
+
+        Returns список (market1, market2, spread), отсортированный по spread убыванию.
+        """
+        pairs: list[tuple[Market, Market, float]] = []
+        for i, m1 in enumerate(markets):
+            words1 = {w.lower() for w in m1.question.split() if len(w) > 4}
+            tags1  = set(m1.tags)
+            for m2 in markets[i + 1:]:
+                # Нужны хотя бы общие теги домена
+                if not (tags1 & set(m2.tags)):
+                    continue
+                words2   = {w.lower() for w in m2.question.split() if len(w) > 4}
+                union    = words1 | words2
+                if not union:
+                    continue
+                overlap  = len(words1 & words2) / len(union)
+                if overlap < min_overlap:
+                    continue
+                spread = abs(m1.yes_price - m2.yes_price)
+                if spread >= min_spread:
+                    pairs.append((m1, m2, round(spread, 3)))
+        return sorted(pairs, key=lambda x: x[2], reverse=True)
 
     def update_weights(self, performance: dict) -> None:
         total = sum(max(0.01, v) for v in performance.values())
