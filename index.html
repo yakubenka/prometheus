@@ -61,7 +61,7 @@ a{color:inherit;text-decoration:none}
 .badge.good{color:var(--good)}
 .badge.bad{color:var(--bad)}
 .badge.warn{color:var(--warn)}
-.list{display:flex;flex-direction:column;gap:12px}
+.list{display:flex;flex-direction:column;gap:10px}
 .item{padding:16px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
 .item-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
 .title{font-size:16px;line-height:1.35;font-weight:590}
@@ -88,8 +88,10 @@ a{color:inherit;text-decoration:none}
 .pos-link:hover{opacity:1}
 .btn-close-sm{background:none;border:none;color:var(--bad);font-size:12px;cursor:pointer;padding:0;opacity:.75}
 .btn-close-sm:hover{opacity:1}
-.kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.kv .item{padding:14px}
+.kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.snap-item{padding:11px 14px}
+.snap-item .snap-l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.snap-item .snap-v{font-size:18px;letter-spacing:-.04em;font-weight:650}
 .table{width:100%;border-collapse:collapse}
 .table th,.table td{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.06);text-align:left}
 .table th{font-size:12px;color:var(--muted);font-weight:500}
@@ -107,7 +109,7 @@ a{color:inherit;text-decoration:none}
 .tab-pane{display:none}
 .tab-pane.active{display:block}
 .alerts{display:grid;gap:10px}
-.alert{padding:14px 16px;border-radius:18px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.alert{padding:11px 14px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
 .alert.warn{border-color:rgba(255,214,10,.25)}
 .alert.bad{border-color:rgba(255,69,58,.25)}
 .alert .top{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
@@ -613,9 +615,9 @@ function renderOverview() {
     ['Scan interval', `${settings?.engine?.scan_interval_sec ?? '—'} sec`],
   ];
   $('riskSnapshot').innerHTML = importantSettings.map(([label, value]) => `
-    <div class="item">
-      <div class="label">${esc(label)}</div>
-      <div class="value-lg">${esc(value)}</div>
+    <div class="item snap-item">
+      <div class="snap-l">${esc(label)}</div>
+      <div class="snap-v">${esc(value)}</div>
     </div>`).join('');
 
   const alerts = buildAlerts();
@@ -633,26 +635,30 @@ function renderOverview() {
   renderLivePositions();
 
   const signals = (state.signals.signals || []).slice(0, 5);
-  $('entryIdeas').innerHTML = signals.length ? signals.map((s) => `
-    <div class="item">
+  $('entryIdeas').innerHTML = signals.length ? signals.map((s) => {
+    const dirColor = s.direction === 'YES' ? 'var(--good)' : s.direction === 'NO' ? 'var(--bad)' : 'var(--muted)';
+    return `
+    <div class="item pos-card">
       <div class="item-top">
-        <div>
-          <div class="title">${esc(s.question || 'Untitled market')}</div>
-          <div class="meta">
-            <span>${esc(s.direction || 'NEUTRAL')}</span>
-            <span>Edge ${pct(s.edge || 0)}</span>
-            <span>Prob ${pct(s.prob || 0)}</span>
-            <span>${esc(s.confidence || 'n/a')}</span>
+        <div style="flex:1;min-width:0">
+          <div class="title" style="font-size:15px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(s.question || 'Untitled market')}</div>
+          <div class="pos-tags">
+            <span style="color:${dirColor};font-weight:600">${esc(s.direction || 'NEUTRAL')}</span>
+            <span>${esc(formatType(s.type || 'signal'))}</span>
+            ${s.time ? `<span>${esc(s.time)}</span>` : ''}
           </div>
         </div>
-        <div style="text-align:right">
-          <div class="pill">${esc(formatType(s.type || 'signal'))}</div>
-          <div class="value-sm" style="margin-top:8px">${esc(s.time || '')}</div>
+        <div class="pos-pnl">
+          <div style="font-size:17px;font-weight:650;letter-spacing:-.03em">${pct(s.prob || 0)}</div>
+          <div class="pos-pct">Edge ${pct(s.edge || 0)}</div>
         </div>
       </div>
-      <div class="compact" style="margin-top:10px">${esc(s.detail || 'No explanation')}</div>
-    </div>
-  `).join('') : `<div class="empty">No fresh entry ideas yet.</div>`;
+      <div class="pos-stats">
+        <span class="ps-item"><span class="ps-l">Confidence</span> ${esc(s.confidence || 'n/a')}</span>
+        ${s.detail ? `<span class="ps-sep">·</span><span class="ps-item" style="white-space:normal">${esc(s.detail)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty">No fresh entry ideas yet.</div>`;
 }
 
 function renderPositions() {
@@ -670,56 +676,60 @@ function renderPositions() {
     ] : []),
   ].join('') || `<div class="empty">No open positions.</div>`;
 
-  $('closedToday').innerHTML = closedToday.length ? closedToday.map((p) => `
-    <div class="item">
+  $('closedToday').innerHTML = closedToday.length ? closedToday.map((p) => {
+    const dirColor = (p.direction || 'YES') === 'YES' ? 'var(--good)' : 'var(--bad)';
+    return `
+    <div class="item pos-card">
       <div class="item-top">
-        <div>
-          <div class="title">${esc(p.question || 'Untitled market')}</div>
-          <div class="meta">
-            <span>${esc(p.direction || '—')}</span>
+        <div style="flex:1;min-width:0">
+          <div class="title" style="font-size:15px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(p.question || 'Untitled market')}</div>
+          <div class="pos-tags">
+            <span style="color:${dirColor};font-weight:600">${esc(p.direction || '—')}</span>
             <span>${esc(formatType(p.type || 'unknown'))}</span>
           </div>
         </div>
-        <div style="text-align:right">
+        <div class="pos-pnl">
           <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
-          <div class="value-sm">Size ${moneyPlain(p.size || 0)}</div>
+          <div class="pos-pct">Size ${moneyPlain(p.size || 0)}</div>
         </div>
       </div>
-    </div>
-  `).join('') : `<div class="empty">Nothing closed today yet.</div>`;
+    </div>`;
+  }).join('') : `<div class="empty">Nothing closed today yet.</div>`;
 }
 
 function renderStrategies() {
   const strategies = state.strategies.strategies || {};
   const items = Object.values(strategies);
-  $('strategyList').innerHTML = items.length ? items.map((s) => `
-    <div class="item">
+  $('strategyList').innerHTML = items.length ? items.map((s) => {
+    const stateColor = s.state === 'active' ? 'var(--good)' : s.state === 'disabled' ? 'var(--bad)' : 'var(--warn)';
+    const reasonNote = s.last_reason ? String(s.last_reason).replaceAll('_', ' ') : '';
+    return `
+    <div class="item pos-card">
       <div class="item-top">
-        <div>
-          <div class="title">${esc(formatType(s.name || 'strategy'))}</div>
-          <div class="meta">
-            <span>State: ${esc(s.state || 'active')}</span>
-            <span>Trades: ${esc(s.trades || 0)}</span>
-            <span>Win rate: ${pct(s.win_rate || 0)}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:590;line-height:1.3">${esc(formatType(s.name || 'strategy'))}</div>
+          <div class="pos-tags">
+            <span style="color:${stateColor};font-weight:600">${esc(s.state || 'active')}</span>
+            <span>×${Number(s.size_multiplier || 1).toFixed(2)} size</span>
+            <span>${esc(s.trades || 0)} trades</span>
           </div>
         </div>
-        <div style="text-align:right">
-          <div class="pill ${s.state === 'active' ? 'good' : s.state === 'disabled' ? 'bad' : 'warn'}">${esc(s.state || 'active')}</div>
-          <div class="value-sm" style="margin-top:8px">Size ×${Number(s.size_multiplier || 1).toFixed(2)}</div>
+        <div class="pos-pnl">
+          <div class="value-lg ${pnlClass(s.pnl)}">${money(s.pnl || 0)}</div>
+          <div class="pos-pct">Win ${pct(s.win_rate || 0)}</div>
         </div>
       </div>
-      <div class="row2">
-        <div class="stat"><div class="sl">PnL</div><div class="sv ${pnlClass(s.pnl)}">${money(s.pnl || 0)}</div></div>
-        <div class="stat"><div class="sl">Volume</div><div class="sv">${moneyPlain(s.volume || 0)}</div></div>
-        <div class="stat"><div class="sl">ROI</div><div class="sv ${pnlClass(s.roi)}">${pct(s.roi || 0)}</div></div>
-        <div class="stat"><div class="sl">Changes</div><div class="sv">${esc(s.weaken_count || 0)}</div></div>
+      <div class="pos-stats">
+        <span class="ps-item"><span class="ps-l">Volume</span> ${moneyPlain(s.volume || 0)}</span>
+        <span class="ps-sep">·</span>
+        <span class="ps-item"><span class="ps-l">ROI</span> <span class="${pnlClass(s.roi)}">${pct(s.roi || 0)}</span></span>
+        <span class="ps-sep">·</span>
+        <span class="ps-item"><span class="ps-l">Changes</span> ${esc(s.weaken_count || 0)}</span>
+        ${reasonNote ? `<span class="ps-sep">·</span><span class="ps-item"><span class="ps-l">Last</span> ${esc(reasonNote)}</span>` : ''}
+        ${s.disabled_until ? `<span class="ps-sep">·</span><span class="ps-item"><span class="ps-l">Until</span> ${esc(s.disabled_until)}</span>` : ''}
       </div>
-      <div class="compact" style="margin-top:14px">
-        ${s.last_reason ? `Last change: ${esc(String(s.last_reason).replaceAll('_',' '))}` : 'No recent state changes.'}
-        ${s.disabled_until ? ` · Disabled until ${esc(s.disabled_until)}` : ''}
-      </div>
-    </div>
-  `).join('') : `<div class="empty">No strategy stats yet.</div>`;
+    </div>`;
+  }).join('') : `<div class="empty">No strategy stats yet.</div>`;
 }
 
 function renderHistory() {
