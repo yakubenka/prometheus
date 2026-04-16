@@ -176,27 +176,108 @@ class SignalEngine:
         "ai_guard":     0.14,
     }
 
+    # ── Category-specific weight overrides ────────────────────────────────────
+    # Не заменяют DEFAULT_WEIGHTS полностью — только патчат ключи.
+    # Обоснование каждого профиля:
+    #
+    # electoral: опросы → calibration важна (longshot кандидаты переоценены),
+    #            consensus/predictit сильны, momentum слаб (цены вязкие)
+    #
+    # economic: book_depth и momentum важны (реакция рынка на данные быстрая),
+    #           base_rate важна (исторические паттерны ставок ФРС хорошо работают)
+    #
+    # geopolitical: sentiment из новостей критичен, consensus слаб (Kalshi мало рынков),
+    #               calibration важна (события сильно переоценены рынком)
+    #
+    # crypto: book_depth максимален (крипто-рынок отзывчив к стакану),
+    #         momentum силён, calibration слабее (меньше longshot bias)
+    #
+    # binary / general: DEFAULT_WEIGHTS без изменений
+    _CATEGORY_WEIGHT_PATCHES: dict[str, dict[str, float]] = {
+        "electoral": {
+            "momentum":    0.10,
+            "consensus":   0.32,
+            "predictit":   0.24,
+            "calibration": 0.10,
+            "base_rate":   0.08,
+            "sentiment":   0.06,
+            "book_depth":  0.04,
+            "ai_guard":    0.14,
+        },
+        "economic": {
+            "momentum":    0.22,
+            "consensus":   0.26,
+            "predictit":   0.16,
+            "book_depth":  0.12,
+            "base_rate":   0.10,
+            "calibration": 0.04,
+            "sentiment":   0.06,
+            "ai_guard":    0.14,
+        },
+        "geopolitical": {
+            "sentiment":   0.14,
+            "calibration": 0.12,
+            "base_rate":   0.10,
+            "momentum":    0.14,
+            "consensus":   0.20,
+            "predictit":   0.14,
+            "book_depth":  0.04,
+            "ai_guard":    0.16,
+        },
+        "crypto": {
+            "book_depth":  0.16,
+            "momentum":    0.24,
+            "consensus":   0.22,
+            "predictit":   0.12,
+            "sentiment":   0.08,
+            "calibration": 0.04,
+            "base_rate":   0.04,
+            "ai_guard":    0.12,
+        },
+    }
+
     def __init__(self, ai: Optional[Anthropic], intel: Optional["IntelPipeline"] = None) -> None:
         self.ai = ai
         self.intel = intel
         self.weights = dict(self.DEFAULT_WEIGHTS)
         self._ai_budget_remaining = cfg.ai_request_budget_per_cycle
 
+    def _weights_for(self, question_type: str) -> dict[str, float]:
+        """
+        Возвращает веса сигналов для данной категории вопроса.
+        Если есть patch — берём его, иначе current self.weights (с адаптацией от learning).
+        """
+        patch = self._CATEGORY_WEIGHT_PATCHES.get(question_type)
+        if not patch:
+            return self.weights
+        # Мержим: patch переопределяет DEFAULT, learning-адаптация поверх
+        merged = dict(self.DEFAULT_WEIGHTS)
+        merged.update(patch)
+        # Применяем relative scaling от learning: если learning поднял signal X
+        # на 20% от дефолта, применяем тот же +20% к категорийному весу
+        for name in merged:
+            default = self.DEFAULT_WEIGHTS.get(name, 0.05)
+            if default > 0:
+                ratio = self.weights.get(name, default) / default
+                merged[name] = round(merged[name] * ratio, 4)
+        return merged
+
     def reset_cycle_budget(self) -> None:
         self._ai_budget_remaining = cfg.ai_request_budget_per_cycle
 
     def analyze(self, market: Market, pre_score: float = 0.0) -> EnsembleResult:
-        question_type = _classify_question(market.question)
-        signals = self._run_non_ai_parallel(market)
-        initial = self._ensemble(market, signals)
-        quality = self._trade_quality(market, initial, signals, pre_score)
-        strategy = self._strategy_type(initial.direction, signals, ai_used=False)
+        question_type  = _classify_question(market.question)
+        cat_weights    = self._weights_for(question_type)
+        signals        = self._run_non_ai_parallel(market, cat_weights)
+        initial        = self._ensemble(market, signals)
+        quality        = self._trade_quality(market, initial, signals, pre_score)
+        strategy       = self._strategy_type(initial.direction, signals, ai_used=False)
 
         ai_signal = None
         if self._should_call_ai(initial, quality, signals):
             ai_signal = self._ai_guard(market)
             if ai_signal:
-                ai_signal.weight = self.weights.get("ai_guard", 0.14)
+                ai_signal.weight = cat_weights.get("ai_guard", 0.14)
                 signals.append(ai_signal)
                 self._ai_budget_remaining = max(0, self._ai_budget_remaining - 1)
 
@@ -218,7 +299,11 @@ class SignalEngine:
 
         return result
 
-    def _run_non_ai_parallel(self, market: Market) -> list[Signal]:
+    def _run_non_ai_parallel(
+        self, market: Market, weights: dict[str, float] | None = None
+    ) -> list[Signal]:
+        if weights is None:
+            weights = self.weights
         tasks = {
             "momentum":    lambda: self._momentum(market),
             "consensus":   lambda: self._consensus(market),
@@ -242,7 +327,7 @@ class SignalEngine:
         out = []
         for name in tasks:
             sig = results.get(name, Signal(name, market.yes_price, 0.10, "NEUTRAL", "error"))
-            sig.weight = self.weights.get(sig.name, 0.05)
+            sig.weight = weights.get(sig.name, 0.05)   # category-specific weight
             out.append(sig)
         return out
 
@@ -267,15 +352,43 @@ class SignalEngine:
             return Signal("momentum", market.yes_price, 0.15, "NEUTRAL", "error")
 
     def _consensus(self, market: Market) -> Signal:
+        """
+        Кросс-биржевой консенсус: Polymarket vs Kalshi + Manifold Markets.
+        Чем больше внешних источников подтверждают ценовой gap — тем выше уверенность.
+        """
+        prices: list[tuple[str, float]] = []  # (source, price)
+
         kalshi = self._kalshi_price(market.question)
-        if kalshi is None:
-            return Signal("consensus", market.yes_price, 0.10, "NEUTRAL", "no Kalshi match")
-        spread = market.yes_price - kalshi
+        if kalshi is not None:
+            prices.append(("Kalshi", kalshi))
+
+        manifold = self._manifold_price(market.question)
+        if manifold is not None:
+            prices.append(("Manifold", manifold))
+
+        if not prices:
+            return Signal("consensus", market.yes_price, 0.10, "NEUTRAL", "no external match")
+
+        # Взвешенный консенсус: Kalshi весит больше (реальные деньги)
+        source_weights = {"Kalshi": 0.65, "Manifold": 0.35}
+        total_w  = sum(source_weights.get(s, 0.50) for s, _ in prices)
+        ext_price = sum(source_weights.get(s, 0.50) * p for s, p in prices) / total_w
+
+        spread = market.yes_price - ext_price
+        sources_str = "+".join(s for s, _ in prices)
+
         if abs(spread) < 0.02:
-            return Signal("consensus", (market.yes_price + kalshi) / 2, 0.60, "NEUTRAL", f"PM≈Kalshi {spread:+.1%}")
+            return Signal("consensus", ext_price, 0.60, "NEUTRAL",
+                          f"PM≈{sources_str} {spread:+.1%}")
+        # Больше источников → выше уверенность
+        conf_mult = 1.0 + 0.15 * (len(prices) - 1)  # 2 источника: +15%
         if spread > 0:
-            return Signal("consensus", kalshi, min(0.90, abs(spread) * 9), "NO", f"PM rich vs Kalshi by {spread:.1%}")
-        return Signal("consensus", kalshi, min(0.90, abs(spread) * 9), "YES", f"PM cheap vs Kalshi by {abs(spread):.1%}")
+            conf = min(0.92, abs(spread) * 9 * conf_mult)
+            return Signal("consensus", ext_price, conf, "NO",
+                          f"PM rich vs {sources_str} by {spread:.1%}")
+        conf = min(0.92, abs(spread) * 9 * conf_mult)
+        return Signal("consensus", ext_price, conf, "YES",
+                      f"PM cheap vs {sources_str} by {abs(spread):.1%}")
 
     def _predictit(self, market: Market) -> Signal:
         try:
@@ -649,4 +762,42 @@ class SignalEngine:
             return sum(vals) / len(vals)
         except Exception as e:
             log.debug(f"Kalshi fetch error: {e}")
+            return None
+
+    def _manifold_price(self, question: str) -> Optional[float]:
+        """
+        Цена рынка с Manifold Markets (play-money, но отражает агрегированное мнение).
+        API: GET https://api.manifold.markets/v0/search-markets?term=...&limit=5
+        Использовать только как дополнительный голос, не как основной арбитраж.
+        """
+        try:
+            q_words = [w for w in question.lower().split() if len(w) > 3][:5]
+            term    = " ".join(q_words[:4])
+            r = _S.get(
+                "https://api.manifold.markets/v0/search-markets",
+                params={"term": term, "limit": 8, "sort": "liquidity"},
+                timeout=5,
+            )
+            if r.status_code != 200:
+                return None
+            markets = r.json()
+            if not isinstance(markets, list) or not markets:
+                return None
+            # Fuzzy match: ищем рынок с максимальным совпадением слов
+            best_score = 0
+            best_prob  = None
+            for m in markets:
+                if m.get("outcomeType") != "BINARY":
+                    continue
+                title = (m.get("question") or "").lower()
+                score = sum(1 for w in q_words if w in title)
+                prob  = m.get("probability")
+                if score > best_score and prob is not None:
+                    best_score = score
+                    best_prob  = float(prob)
+            if best_score < 2 or best_prob is None:
+                return None
+            return round(best_prob, 4)
+        except Exception as e:
+            log.debug(f"Manifold fetch error: {e}")
             return None
