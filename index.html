@@ -521,11 +521,16 @@ function renderOverview() {
   // Balance — prefer live Polymarket data when fresh (< 45 s)
   const live      = state.polyLive;
   const liveFresh = live.configured && live.positions && (Date.now() - live.ts) < 45000;
-  const cashBalance  = Number(ov.bankroll || 0);
-  const portfolioVal = liveFresh ? live.portfolio_value : (ov.portfolio_value || 0);
-  const totalBalance = cashBalance + portfolioVal;
 
-  $('heroBankroll').textContent = liveFresh ? moneyPlain(totalBalance) : (cashBalance > 0 ? moneyPlain(cashBalance) : '—');
+  // ov.bankroll = total capital (cash + unrealised PnL from internal model).
+  // portfolioVal = current market value of open positions (from Polymarket live).
+  // cashBalance  = total − positions (what's not currently deployed).
+  // totalBalance = ov.bankroll (already the correct total — do NOT add portfolioVal again).
+  const portfolioVal = liveFresh ? (live.portfolio_value || 0) : (ov.portfolio_value || 0);
+  const totalBalance = Number(ov.bankroll || 0);
+  const cashBalance  = Math.max(0, totalBalance - portfolioVal);
+
+  $('heroBankroll').textContent = totalBalance > 0 ? moneyPlain(totalBalance) : '—';
   const syncTime = (liveFresh && live.synced_at) ? ` · Polymarket ${live.synced_at}` : (ov.poly_sync_at ? ` · Polymarket ${ov.poly_sync_at}` : '');
   $('heroSubtitle').textContent = `${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades${syncTime}`;
 
