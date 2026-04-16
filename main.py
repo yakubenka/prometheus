@@ -608,28 +608,37 @@ class Prometheus:
             self._real_bankroll = new_bankroll
             return
 
-        # ── Приоритет 2: оценка по Data API ───────────────────────────────────
-        if not cfg.poly_funder:
-            self._real_bankroll = max(1.0, cfg.bankroll + realized_pnl)
-            return
+        # ── Приоритет 2: оценка по Data API (публичный, требует poly_funder) ───
         try:
-            snap = self._poly_client.portfolio()
+            upnl_est = 0.0
+            if cfg.poly_funder:
+                snap     = self._poly_client.portfolio()
+                upnl_est = snap.unrealised_pnl
+                internal_count = len(self.risk.open_positions)
+                poly_count     = snap.position_count
+                if internal_count != poly_count and poly_count > 0:
+                    log.warning(
+                        f"⚠️ Рассинхронизация позиций: внутри={internal_count}, "
+                        f"Polymarket={poly_count}"
+                    )
+            else:
+                # Без poly_funder — считаем uPnL из CLOB midpoint по каждой позиции
+                # (публичный API, авторизация не нужна)
+                for pos in self.risk.open_positions:
+                    if not pos.token_id:
+                        continue
+                    cur = self._poly_client.token_price(pos.token_id)
+                    if cur and cur > 0 and pos.entry_price > 0:
+                        entry_p = pos.entry_price if pos.direction == "YES" else 1 - pos.entry_price
+                        cur_p   = cur if pos.direction == "YES" else 1 - cur
+                        upnl_est += (cur_p - entry_p) / max(entry_p, 0.01) * pos.size_usd
+
             old_bankroll = self._real_bankroll
-            self._real_bankroll = max(
-                1.0,
-                cfg.bankroll + realized_pnl + snap.unrealised_pnl,
-            )
-            if abs(self._real_bankroll - old_bankroll) > 0.5:
+            self._real_bankroll = max(1.0, cfg.bankroll + realized_pnl + upnl_est)
+            if abs(self._real_bankroll - old_bankroll) > 0.50:
                 log.info(
-                    f"💰 Bankroll (estimate): ${old_bankroll:.2f} → ${self._real_bankroll:.2f} "
-                    f"(realized ${realized_pnl:+.2f}, uPnL ${snap.unrealised_pnl:+.2f}, "
-                    f"{snap.position_count} позиций)"
-                )
-            internal_count = len(self.risk.open_positions)
-            poly_count = snap.position_count
-            if internal_count != poly_count and poly_count > 0:
-                log.warning(
-                    f"⚠️ Рассинхронизация позиций: внутри={internal_count}, Polymarket={poly_count}"
+                    f"💰 Bankroll: ${old_bankroll:.2f} → ${self._real_bankroll:.2f} "
+                    f"(realized ${realized_pnl:+.2f}, uPnL ${upnl_est:+.2f})"
                 )
         except Exception as e:
             log.debug(f"_sync_balance error: {e}")
