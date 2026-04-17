@@ -767,16 +767,16 @@ class Prometheus:
                 self.tg.error(f"Ордер упал (smart money): {sig.question[:60]}")
 
         # 2. Двухэтапный анализ рынков
-        # Этап 1: быстрый скрининг 50 рынков без AI
+        # Этап 1: быстрый скрининг 100 рынков без AI
         all_markets = fetch_markets(
-            limit          = 50,   # смотрим широко
+            limit          = 100,  # смотрим широко
             min_volume_24h = cfg.min_volume,
         )
         self._daily_signals += len(all_markets)
-        log.info(f"Рынков загружено: {len(all_markets)} (из 50)")
+        log.info(f"Рынков загружено: {len(all_markets)} (из 100)")
 
         # Этап 2: анализ кандидатов. AI подключается редко внутри SignalEngine.
-        top_n = 20 if cfg.dry_run else max(cfg.max_markets, 20)
+        top_n = max(cfg.max_markets, 30)
         candidates = screen(all_markets, top_n=top_n, fetch_kalshi=False)
         log.info(f"После скрининга: {len(candidates)} кандидатов для decision engine")
 
