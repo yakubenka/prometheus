@@ -551,7 +551,11 @@ def audit():
 @app.get("/")
 def dashboard_index():
     if os.path.exists(INDEX_PATH):
-        return FileResponse(INDEX_PATH)
+        r = FileResponse(INDEX_PATH)
+        r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        r.headers["Pragma"] = "no-cache"
+        r.headers["Expires"] = "0"
+        return r
     raise HTTPException(404, "Dashboard not found")
 
 @app.get("/api/settings")
