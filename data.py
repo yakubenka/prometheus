@@ -27,10 +27,11 @@ def _build_session() -> requests.Session:
     s = requests.Session()
     s.headers["User-Agent"] = "Prometheus/3.0"
     retry = Retry(
-        total=3,
-        backoff_factor=1.5,
-        status_forcelist=[429, 500, 502, 503, 504],
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[500, 502, 503, 504],  # 429 handled manually below
         allowed_methods=["GET"],
+        raise_on_status=False,
     )
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
@@ -128,18 +129,25 @@ class Trade:
 # ── Fetchers ──────────────────────────────────────────────────────────────────
 
 def _safe_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict | list]:
-    try:
-        r = SESSION.get(url, params=params, timeout=timeout)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.Timeout:
-        log.warning(f"Timeout: {url}")
-    except requests.exceptions.HTTPError as e:
-        log.warning(f"HTTP {e.response.status_code}: {url}")
-    except requests.exceptions.ConnectionError:
-        log.warning(f"Connection error: {url}")
-    except ValueError:
-        log.warning(f"Invalid JSON: {url}")
+    for attempt in range(4):
+        try:
+            r = SESSION.get(url, params=params, timeout=timeout)
+            if r.status_code == 429:
+                wait = min(60, 15 * (2 ** attempt))
+                log.warning(f"Rate limited (429) attempt {attempt+1}/4 — sleeping {wait}s | {url.split('?')[0]}")
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.Timeout:
+            log.warning(f"Timeout attempt {attempt+1}: {url.split('?')[0]}")
+        except requests.exceptions.HTTPError as e:
+            log.warning(f"HTTP {e.response.status_code}: {url.split('?')[0]}")
+            return None
+        except Exception as e:
+            log.warning(f"API error attempt {attempt+1} {url.split('?')[0]}: {type(e).__name__}: {str(e)[:80]}")
+            if attempt < 3:
+                time.sleep(2 ** attempt)
     return None
 
 

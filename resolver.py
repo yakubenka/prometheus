@@ -265,27 +265,54 @@ def redeem_winning_position(market_id: str, token_id: str,
             )
         client.set_api_creds(raw_creds)
 
-        # Попытка 1: нативный redeem
+        import time as _time
+
+        # Попытка 1: нативный redeem (если метод доступен в py_clob_client)
         if hasattr(client, "redeem_positions"):
-            result = client.redeem_positions(token_id=token_id)
-            log.info(f"Redeem OK (native): market={market_id[:12]} result={result}")
-            return True
+            try:
+                result = client.redeem_positions(token_id=token_id)
+                log.info(f"Redeem OK (native): market={market_id[:12]} result={result}")
+                return True
+            except Exception as e1:
+                log.debug(f"native redeem failed: {e1}")
 
-        # Попытка 2: HTTP redeem endpoint
+        # Попытка 2: HTTP /redeem endpoint — повторяем 3 раза (API иногда запаздывает)
         headers = client.get_headers("POST", "/redeem")
-        resp = requests.post(
-            f"{CLOB}/redeem",
-            json={"token_id": token_id},
-            headers=headers,
-            timeout=10,
-        )
-        if resp.status_code in (200, 201):
-            log.info(f"Redeem OK (HTTP): market={market_id[:12]} | {resp.text[:80]}")
-            return True
-        else:
-            log.warning(f"Redeem HTTP {resp.status_code}: {resp.text[:120]}")
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    f"{CLOB}/redeem",
+                    json={"token_id": token_id},
+                    headers=headers,
+                    timeout=15,
+                )
+                if resp.status_code in (200, 201):
+                    log.info(f"Redeem OK (HTTP): market={market_id[:12]} | {resp.text[:80]}")
+                    return True
+                log.warning(f"Redeem HTTP {resp.status_code} attempt {attempt+1}: {resp.text[:100]}")
+                if resp.status_code == 400:
+                    break  # bad request — не повторяем
+                _time.sleep(5 * (attempt + 1))
+            except Exception as e2:
+                log.debug(f"HTTP redeem attempt {attempt+1} failed: {e2}")
+                _time.sleep(5)
 
-        # Попытка 3: SELL winning shares по рыночной цене
+        # Попытка 3: /redeem-positions endpoint (альтернативный путь)
+        try:
+            resp2 = requests.post(
+                f"{CLOB}/redeem-positions",
+                json={"tokenId": token_id, "amount": shares},
+                headers=headers,
+                timeout=15,
+            )
+            if resp2.status_code in (200, 201):
+                log.info(f"Redeem OK (/redeem-positions): market={market_id[:12]}")
+                return True
+            log.debug(f"/redeem-positions {resp2.status_code}: {resp2.text[:80]}")
+        except Exception as e3:
+            log.debug(f"/redeem-positions failed: {e3}")
+
+        # Попытка 4: SELL winning shares (токены ценой ~$1 всё ещё торгуемы)
         try:
             from py_clob_client.clob_types import MarketOrderArgs, OrderType
             from py_clob_client.order_builder.constants import SELL
