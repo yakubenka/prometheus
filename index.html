@@ -4,904 +4,711 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Prometheus</title>
 <style>
 :root{
   --bg:#000;
-  --panel:#111;
-  --panel-2:#171717;
-  --line:#252525;
+  --surface:#111;
+  --surface2:#161616;
+  --line:#222;
   --text:#fff;
-  --muted:#9a9a9a;
-  --soft:#c8c8c8;
-  --good:#32d74b;
+  --muted:#666;
+  --soft:#aaa;
+  --good:#30d158;
   --bad:#ff453a;
   --warn:#ffd60a;
   --blue:#0a84ff;
-  --radius:22px;
-  --shadow:0 20px 60px rgba(0,0,0,.35);
+  --r:18px;
 }
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",Arial,sans-serif}
-body{max-width:1280px;margin:0 auto;padding:24px 20px 100px;-webkit-font-smoothing:antialiased}
-button,input{font:inherit}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+body{max-width:960px;margin:0 auto;padding:20px 16px 80px}
+button{font:inherit;cursor:pointer}
 a{color:inherit;text-decoration:none}
-.shell{display:flex;flex-direction:column;gap:18px}
-.topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;padding:4px 0 8px;background:linear-gradient(180deg,rgba(0,0,0,.95),rgba(0,0,0,.85),rgba(0,0,0,0));backdrop-filter:blur(14px);z-index:5}
-.brand{display:flex;align-items:center;gap:12px}
-.brand-mark{width:38px;height:38px;border-radius:14px;background:#fff;color:#000;display:grid;place-items:center;font-weight:700}
-.brand-copy h1{font-size:22px;letter-spacing:-.03em;margin:0}
-.brand-copy p{margin:2px 0 0;color:var(--muted);font-size:13px}
-.live{display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:rgba(255,255,255,.03);padding:10px 14px;border-radius:999px;font-size:13px;color:var(--soft)}
-.dot{width:8px;height:8px;border-radius:50%}
-.tabs{display:flex;gap:8px;overflow:auto;padding-bottom:4px}
-.tab{border:1px solid var(--line);background:transparent;color:var(--soft);padding:11px 14px;border-radius:999px;white-space:nowrap;cursor:pointer;transition:.18s}
+
+/* topbar */
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:6px 0 16px;position:sticky;top:0;z-index:9;background:linear-gradient(var(--bg) 80%,transparent);backdrop-filter:blur(12px)}
+.brand{font-size:17px;font-weight:700;letter-spacing:-.02em}
+.status-pill{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--soft);background:var(--surface);border:1px solid var(--line);padding:6px 12px;border-radius:999px}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+
+/* tabs */
+.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:14px;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{border:1px solid var(--line);background:transparent;color:var(--soft);padding:8px 14px;border-radius:999px;white-space:nowrap;font-size:13px;transition:.15s}
 .tab.active{background:#fff;color:#000;border-color:#fff}
-.grid{display:grid;grid-template-columns:1.35fr .85fr;gap:18px}
-.panel{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.03));border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
-.hero{padding:26px 26px 22px}
-.kicker{font-size:11px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase;margin-bottom:12px}
-.hero-row{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
-.hero-main{font-size:56px;line-height:.95;letter-spacing:-.05em;font-weight:700}
-.hero-sub{margin-top:10px;color:var(--muted);font-size:14px}
-.hero-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:24px}
-.metric{padding:15px 16px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
-.metric.small{padding:14px}
-.metric .label{font-size:12px;color:var(--muted);margin-bottom:8px}
-.metric .value{font-size:28px;letter-spacing:-.04em;font-weight:650}
-.metric .sub{margin-top:6px;font-size:12px;color:var(--muted)}
-.stack{display:flex;flex-direction:column;gap:18px}
-.section{padding:22px}
-.section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:16px}
-.section-title{font-size:22px;letter-spacing:-.03em}
-.section-note{color:var(--muted);font-size:13px;margin-top:4px}
-.badges{display:flex;gap:8px;flex-wrap:wrap}
-.badge{padding:7px 10px;border-radius:999px;background:#1b1b1b;color:var(--soft);font-size:12px;border:1px solid var(--line)}
-.badge.good{color:var(--good)}
-.badge.bad{color:var(--bad)}
-.badge.warn{color:var(--warn)}
-.list{display:flex;flex-direction:column;gap:10px}
-.item{padding:16px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
-.item-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-.title{font-size:16px;line-height:1.35;font-weight:590}
-.meta{margin-top:8px;font-size:13px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
-.pill{padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--soft);white-space:nowrap}
-.value-lg{font-size:24px;font-weight:650;letter-spacing:-.04em}
-.value-sm{font-size:14px;color:var(--muted)}
-.row2{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
-.stat{padding:12px 0 0}
-.stat .sl{color:var(--muted);font-size:12px;margin-bottom:4px}
-.stat .sv{font-size:18px;letter-spacing:-.03em;font-weight:630}
-/* Compact position card */
-.pos-card{padding:12px 14px}
-.pos-tags{margin-top:5px;font-size:12px;color:var(--muted);display:flex;gap:7px;flex-wrap:wrap;align-items:center}
-.pos-pnl{text-align:right;flex-shrink:0}
-.pos-pnl .value-lg{font-size:19px;letter-spacing:-.03em;font-weight:650}
-.pos-pct{font-size:12px;color:var(--muted);margin-top:1px}
-.pos-stats{margin-top:9px;font-size:13px;color:var(--soft);display:flex;flex-wrap:wrap;gap:3px 0;align-items:center;border-top:1px solid rgba(255,255,255,.05);padding-top:8px}
-.ps-item{white-space:nowrap;display:inline-flex;align-items:baseline;gap:4px}
-.ps-l{font-size:11px;color:var(--muted)}
-.ps-sep{color:rgba(255,255,255,.14);margin:0 7px;font-size:12px;line-height:1}
-.pos-actions{margin-top:8px;display:flex;gap:12px;align-items:center}
-.pos-link{font-size:12px;color:var(--blue);opacity:.8}
-.pos-link:hover{opacity:1}
-.btn-close-sm{background:none;border:none;color:var(--bad);font-size:12px;cursor:pointer;padding:0;opacity:.75}
-.btn-close-sm:hover{opacity:1}
-.kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.snap-item{padding:11px 14px}
-.snap-item .snap-l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
-.snap-item .snap-v{font-size:18px;letter-spacing:-.04em;font-weight:650}
-.table{width:100%;border-collapse:collapse}
-.table th,.table td{padding:14px 0;border-bottom:1px solid rgba(255,255,255,.06);text-align:left}
-.table th{font-size:12px;color:var(--muted);font-weight:500}
-.table td{font-size:14px}
-.table tr:last-child td{border-bottom:none}
+
+/* tab panes */
+.tab-pane{display:none}
+.tab-pane.active{display:flex;flex-direction:column;gap:14px}
+
+/* card */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px}
+.card-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+
+/* hero row */
+.hero-row{display:grid;grid-template-columns:1fr 200px;gap:14px;align-items:stretch}
+.balance-val{font-size:48px;font-weight:700;letter-spacing:-.05em;line-height:1}
+.balance-sub{font-size:13px;color:var(--muted);margin-top:6px}
+.balance-rows{margin-top:14px;display:flex;flex-direction:column;gap:4px}
+.brow{display:flex;justify-content:space-between;font-size:13px;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,.03)}
+.brow .bl{color:var(--muted)}
+.brow .bv{font-weight:600}
+
+/* sparkline card */
+.spark-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;display:flex;flex-direction:column;justify-content:space-between}
+.spark-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.spark-val{font-size:22px;font-weight:700;letter-spacing:-.04em;margin-top:4px}
+.spark-wrap{flex:1;display:flex;align-items:flex-end;padding-top:8px;min-height:60px}
+.spark-wrap svg{width:100%;height:60px;overflow:visible}
+
+/* metric strip */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.metric{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.metric .ml{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.metric .mv{font-size:22px;font-weight:700;letter-spacing:-.04em;line-height:1}
+.metric .ms{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* alerts */
+.alert-item{padding:12px 16px;border-radius:14px;border:1px solid var(--line);background:var(--surface);display:flex;gap:12px;align-items:flex-start}
+.alert-item.warn{border-color:rgba(255,214,10,.3);background:rgba(255,214,10,.04)}
+.alert-item.bad{border-color:rgba(255,69,58,.3);background:rgba(255,69,58,.04)}
+.alert-icon{font-size:16px;flex-shrink:0;margin-top:1px}
+.alert-title{font-size:14px;font-weight:600;line-height:1.3}
+.alert-text{font-size:12px;color:var(--muted);margin-top:3px}
+
+/* signals preview */
+.sig-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);gap:12px}
+.sig-row:last-child{border-bottom:none}
+.sig-q{font-size:13px;line-height:1.3;flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sig-right{flex-shrink:0;text-align:right}
+.sig-dir{font-size:12px;font-weight:700}
+.sig-edge{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* position card */
+.pos-card{background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.pos-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.pos-q{font-size:14px;font-weight:590;line-height:1.35;flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pos-pnl{flex-shrink:0;text-align:right}
+.pos-pnl-val{font-size:18px;font-weight:700;letter-spacing:-.03em}
+.pos-pnl-pct{font-size:12px;color:var(--muted);margin-top:1px}
+.pos-meta{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 0;font-size:12px;color:var(--soft);align-items:center;border-top:1px solid rgba(255,255,255,.05);padding-top:8px}
+.pm-sep{color:rgba(255,255,255,.15);margin:0 6px}
+.pm-l{color:var(--muted);margin-right:3px}
+.pos-foot{margin-top:8px;display:flex;gap:12px;align-items:center}
+.pos-link{font-size:12px;color:var(--blue)}
+.btn-close{background:none;border:none;font-size:12px;color:var(--bad);padding:0;opacity:.75}
+.btn-close:hover{opacity:1}
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--soft)}
+.tag.good{color:var(--good);border-color:rgba(48,209,88,.25)}
+.tag.bad{color:var(--bad);border-color:rgba(255,69,58,.25)}
+.tag.warn{color:var(--warn);border-color:rgba(255,214,10,.25)}
+
+/* strategy */
+.strat-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line);gap:14px}
+.strat-row:last-child{border-bottom:none}
+.strat-name{font-size:14px;font-weight:600;text-transform:capitalize}
+.strat-state{font-size:12px;margin-top:2px}
+.strat-nums{text-align:right;flex-shrink:0}
+.strat-pnl{font-size:16px;font-weight:700;letter-spacing:-.03em}
+.strat-sub{font-size:11px;color:var(--muted);margin-top:2px}
+
+/* history table */
+.htable{width:100%;border-collapse:collapse}
+.htable th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;padding:0 0 10px;text-align:left;border-bottom:1px solid var(--line)}
+.htable td{font-size:13px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top}
+.htable tr:last-child td{border-bottom:none}
+.htable .right{text-align:right}
+
+/* settings */
+.sg{display:grid;gap:8px}
+.srow{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+.srow:last-child{border-bottom:none}
+.srow .sk{color:var(--muted)}
+.srow .sv{font-weight:600}
+
+/* section label */
+.section-lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:4px 0 8px}
+
+/* modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(16px);display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
+.modal{width:min(420px,100%);background:#111;border:1px solid var(--line);border-radius:24px;padding:24px}
+.modal h3{font-size:22px;font-weight:700;letter-spacing:-.04em;margin-bottom:8px}
+.modal p{font-size:14px;color:var(--muted);margin-bottom:18px;line-height:1.5}
+.input{width:100%;padding:13px 15px;border-radius:14px;border:1px solid var(--line);background:#0a0a0a;color:#fff;outline:none;font:inherit;font-size:14px}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+.btn{border:1px solid var(--line);padding:10px 16px;border-radius:999px;font-size:13px;font-weight:600}
+.btn-primary{background:#fff;color:#000;border-color:#fff}
+.btn-ghost{background:transparent;color:var(--soft)}
+.btn-danger{background:rgba(255,69,58,.12);color:var(--bad);border-color:rgba(255,69,58,.3)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.modal-result{font-size:13px;color:var(--muted);margin-top:10px}
+
+/* utils */
 .positive{color:var(--good)}
 .negative{color:var(--bad)}
-.muted{color:var(--muted)}
-.empty{color:var(--muted);padding:2px 0 4px}
-.cta{display:flex;gap:10px;align-items:center}
-.btn{border:1px solid var(--line);background:#fff;color:#000;padding:10px 14px;border-radius:999px;cursor:pointer}
-.btn.secondary{background:transparent;color:#fff}
-.btn.danger{background:rgba(255,69,58,.12);color:#fff;border-color:rgba(255,69,58,.28)}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.tab-pane{display:none}
-.tab-pane.active{display:block}
-.alerts{display:grid;gap:10px}
-.alert{padding:11px 14px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
-.alert.warn{border-color:rgba(255,214,10,.25)}
-.alert.bad{border-color:rgba(255,69,58,.25)}
-.alert .top{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
-.alert .kind{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.09em}
-.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-.setting-group{padding:18px;border-radius:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
-.setting-group h3{margin:0 0 14px;font-size:17px}
-.setting{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.05)}
-.setting:last-child{border-bottom:none}
-.setting span:first-child{color:var(--muted)}
-.footer-note{margin-top:8px;color:var(--muted);font-size:12px}
-.modal-wrap{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(18px);display:none;align-items:center;justify-content:center;padding:20px;z-index:15}
-.modal{width:min(440px,100%);background:#111;border:1px solid var(--line);border-radius:28px;padding:24px}
-.modal h3{font-size:24px;letter-spacing:-.04em;margin:0 0 10px}
-.modal p{margin:0 0 18px;color:var(--muted);line-height:1.45}
-.input{width:100%;padding:14px 16px;border-radius:16px;border:1px solid var(--line);background:#0a0a0a;color:#fff;outline:none}
-.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
-.compact{font-size:13px;color:var(--muted)}
-@media (max-width:980px){
-  body{padding:18px 14px 88px}
-  .grid{grid-template-columns:1fr}
-  .hero-main{font-size:44px}
-  .settings-grid,.kv,.row2{grid-template-columns:1fr 1fr}
+.empty{font-size:13px;color:var(--muted);padding:8px 0}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.pulse{animation:pulse 2s ease-in-out infinite}
+
+@media(max-width:700px){
+  .hero-row{grid-template-columns:1fr}
+  .metrics{grid-template-columns:1fr 1fr}
+  .spark-card{min-height:120px}
 }
-@media (max-width:640px){
-  .hero-row{flex-direction:column}
-  .hero-meta,.settings-grid,.kv,.row2{grid-template-columns:1fr}
-  .section{padding:18px}
-  .hero{padding:22px 18px}
-  .value-lg{font-size:20px}
+@media(max-width:420px){
+  .balance-val{font-size:38px}
+  .metrics{grid-template-columns:1fr 1fr}
 }
-.balance-breakdown{margin-top:14px;display:flex;flex-direction:column;gap:5px}
-.brow{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:8px 12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04)}
-.bl{color:var(--muted)}
-.bv{font-weight:600}
-.poly-tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--good);letter-spacing:.04em;vertical-align:middle}
-.poly-dot{width:5px;height:5px;border-radius:50%;background:currentColor;display:inline-block}
-@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.3}}
-.poly-dot.pulse{animation:livepulse 2s ease-in-out infinite}
 </style>
 </head>
 <body>
-<div class="shell">
-  <div class="topbar">
-    <div class="brand">
-      <div class="brand-mark">P</div>
-      <div class="brand-copy">
-        <h1>Prometheus</h1>
-        <p>Minimal control for live trading</p>
-      </div>
-    </div>
-    <div class="live">
-      <span class="dot" id="liveDot"></span>
-      <span id="liveText">Connecting…</span>
-    </div>
+<div class="topbar">
+  <div class="brand">Prometheus</div>
+  <div class="status-pill">
+    <span class="dot" id="liveDot" style="background:var(--muted)"></span>
+    <span id="liveText">Connecting…</span>
   </div>
-
-  <div class="tabs" id="tabs">
-    <button class="tab active" data-tab="overview">Overview</button>
-    <button class="tab" data-tab="positions">Positions</button>
-    <button class="tab" data-tab="strategies">Strategies</button>
-    <button class="tab" data-tab="history">History</button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </div>
-
-  <section id="overview" class="tab-pane active">
-    <div class="grid">
-      <div class="panel hero">
-        <div class="kicker">Main status</div>
-        <div class="hero-row">
-          <div>
-            <div class="hero-main" id="heroBankroll">—</div>
-            <div class="hero-sub" id="heroSubtitle">Connecting…</div>
-            <div class="balance-breakdown" id="balanceBreakdown" style="display:none"></div>
-          </div>
-          <div class="badges" id="heroBadges"></div>
-        </div>
-        <div class="hero-meta">
-          <div class="metric">
-            <div class="label">Daily PnL</div>
-            <div class="value" id="metricDay">$0</div>
-            <div class="sub" id="metricDaySub">Today</div>
-          </div>
-          <div class="metric">
-            <div class="label">Total PnL</div>
-            <div class="value" id="metricTotal">$0</div>
-            <div class="sub" id="metricTotalSub">All time</div>
-          </div>
-          <div class="metric small">
-            <div class="label">Open positions</div>
-            <div class="value" id="metricOpen">0</div>
-            <div class="sub" id="metricOpenSub">Exposure $0</div>
-          </div>
-          <div class="metric small">
-            <div class="label">Portfolio value</div>
-            <div class="value" id="metricPortfolio">$0</div>
-            <div class="sub" id="metricPortfolioSub">Current market value</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="stack">
-        <div class="panel section">
-          <div class="section-head">
-            <div>
-              <div class="section-title">Risk snapshot</div>
-              <div class="section-note">Only the settings that matter live</div>
-            </div>
-          </div>
-          <div class="kv" id="riskSnapshot"></div>
-        </div>
-
-        <div class="panel section">
-          <div class="section-head">
-            <div>
-              <div class="section-title">Alerts</div>
-              <div class="section-note">What needs your attention now</div>
-            </div>
-          </div>
-          <div class="alerts" id="alertsList"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel section" id="livePositionsSection" style="margin-top:18px;display:none">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Open positions</div>
-          <div class="section-note" id="polySync">Synced with Polymarket</div>
-        </div>
-        <div id="polyBadge"></div>
-      </div>
-      <div class="list" id="livePositionsList"></div>
-    </div>
-
-    <div class="panel section" style="margin-top:18px">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Why bot wants to enter</div>
-          <div class="section-note">Signals summary instead of a separate Signals tab</div>
-        </div>
-      </div>
-      <div class="list" id="entryIdeas"></div>
-    </div>
-  </section>
-
-  <section id="positions" class="tab-pane">
-    <div class="panel section">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Open positions</div>
-          <div class="section-note">Manual close stays available on every live position</div>
-        </div>
-      </div>
-      <div class="list" id="openPositions"></div>
-    </div>
-
-    <div class="panel section" style="margin-top:18px">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Closed today</div>
-          <div class="section-note">Most recent resolved or manually closed positions</div>
-        </div>
-      </div>
-      <div class="list" id="closedToday"></div>
-    </div>
-  </section>
-
-  <section id="strategies" class="tab-pane">
-    <div class="panel section">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Strategy health</div>
-          <div class="section-note">Separate results for cross-market gap, market-data, and AI-assisted logic</div>
-        </div>
-      </div>
-      <div class="list" id="strategyList"></div>
-    </div>
-  </section>
-
-  <section id="history" class="tab-pane">
-    <div class="panel section">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Trade history</div>
-          <div class="section-note">Recent closed positions with result and type</div>
-        </div>
-      </div>
-      <div style="overflow:auto">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Market</th>
-              <th>Type</th>
-              <th>Side</th>
-              <th>Size</th>
-              <th>PnL</th>
-            </tr>
-          </thead>
-          <tbody id="historyRows"></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <section id="settings" class="tab-pane">
-    <div class="panel section">
-      <div class="section-head">
-        <div>
-          <div class="section-title">Important settings</div>
-          <div class="section-note">Key Railway values reflected in the dashboard</div>
-        </div>
-      </div>
-      <div class="settings-grid" id="settingsGrid"></div>
-      <div class="footer-note">Keys and secret values are never shown here. Only operational settings are displayed.</div>
-    </div>
-  </section>
 </div>
 
-<div class="modal-wrap" id="closeModal">
+<div class="tabs">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="positions">Positions</button>
+  <button class="tab" data-tab="history">History</button>
+  <button class="tab" data-tab="strategies">Strategies</button>
+  <button class="tab" data-tab="settings">Settings</button>
+</div>
+
+<!-- OVERVIEW -->
+<section id="overview" class="tab-pane active">
+
+  <!-- Balance + Sparkline -->
+  <div class="hero-row">
+    <div class="card">
+      <div class="card-title">Balance</div>
+      <div class="balance-val" id="balVal">—</div>
+      <div class="balance-sub" id="balSub">—</div>
+      <div class="balance-rows" id="balRows"></div>
+    </div>
+    <div class="spark-card">
+      <div>
+        <div class="spark-label">Cumulative PnL</div>
+        <div class="spark-val" id="sparkVal">—</div>
+      </div>
+      <div class="spark-wrap">
+        <svg id="sparkSvg" viewBox="0 0 160 60" preserveAspectRatio="none">
+          <path id="sparkPath" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line id="sparkZero" x1="0" x2="160" stroke="rgba(255,255,255,.1)" stroke-width="1" stroke-dasharray="3,3"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metric strip -->
+  <div class="metrics">
+    <div class="metric">
+      <div class="ml">Today</div>
+      <div class="mv" id="mToday">$0</div>
+      <div class="ms" id="mTodaySub">PnL</div>
+    </div>
+    <div class="metric">
+      <div class="ml">Total PnL</div>
+      <div class="mv" id="mTotal">$0</div>
+      <div class="ms" id="mTotalSub">All time</div>
+    </div>
+    <div class="metric">
+      <div class="ml">Open</div>
+      <div class="mv" id="mOpen">0</div>
+      <div class="ms" id="mOpenSub">positions</div>
+    </div>
+    <div class="metric">
+      <div class="ml">Win rate</div>
+      <div class="mv" id="mWin">—</div>
+      <div class="ms" id="mWinSub">resolved trades</div>
+    </div>
+  </div>
+
+  <!-- Alerts (hidden when empty) -->
+  <div id="alertsWrap"></div>
+
+  <!-- Last 3 signals -->
+  <div class="card" id="sigCard" style="display:none">
+    <div class="card-title">Recent signals</div>
+    <div id="sigList"></div>
+  </div>
+
+</section>
+
+<!-- POSITIONS -->
+<section id="positions" class="tab-pane">
+  <div class="card">
+    <div class="card-title">Open positions</div>
+    <div id="openList"><div class="empty">No open positions.</div></div>
+  </div>
+  <div class="card" id="closedCard">
+    <div class="card-title">Closed today</div>
+    <div id="closedList"><div class="empty">Nothing closed today.</div></div>
+  </div>
+</section>
+
+<!-- HISTORY -->
+<section id="history" class="tab-pane">
+  <div class="card">
+    <div class="card-title">Trade history</div>
+    <div style="overflow-x:auto">
+      <table class="htable">
+        <thead><tr>
+          <th>Market</th>
+          <th>Side</th>
+          <th>Type</th>
+          <th>Size</th>
+          <th class="right">PnL</th>
+        </tr></thead>
+        <tbody id="histRows"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- STRATEGIES -->
+<section id="strategies" class="tab-pane">
+  <div class="card">
+    <div class="card-title">Strategy health</div>
+    <div id="stratList"><div class="empty">No data yet.</div></div>
+  </div>
+</section>
+
+<!-- SETTINGS -->
+<section id="settings" class="tab-pane">
+  <div class="card">
+    <div class="card-title">Risk</div>
+    <div class="sg" id="sgRisk"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Engine</div>
+    <div class="sg" id="sgEngine"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Security</div>
+    <div class="sg" id="sgSec"></div>
+  </div>
+</section>
+
+<!-- Manual close modal -->
+<div class="modal-bg" id="closeModal">
   <div class="modal">
-    <h3>Manual close</h3>
-    <p id="closePrompt">Enter the manual close key to close this position from the dashboard.</p>
-    <input class="input" id="closeKeyInput" type="password" placeholder="Manual close key">
-    <div class="compact" id="closeResult" style="margin-top:12px"></div>
+    <h3>Close position</h3>
+    <p id="closePrompt">Enter manual close key.</p>
+    <input class="input" id="closeKey" type="password" placeholder="Manual close key">
+    <div class="modal-result" id="closeResult"></div>
     <div class="modal-actions">
-      <button class="btn secondary" id="closeCancel">Cancel</button>
-      <button class="btn danger" id="closeConfirm">Close position</button>
+      <button class="btn btn-ghost" id="closeCancel">Cancel</button>
+      <button class="btn btn-danger" id="closeConfirm">Close position</button>
     </div>
   </div>
 </div>
 
 <script>
-const state = {
+const S = {
   overview: {},
-  positions: {open: [], closed_today: [], history: []},
-  signals: {signals: []},
+  positions: {open:[], closed_today:[], history:[]},
+  signals: {signals:[]},
   learning: {},
-  strategies: {strategies: {}},
+  strategies: {strategies:{}},
   settings: {},
-  polyLive: {configured: false, positions: [], portfolio_value: 0, unrealised_pnl: 0, total_invested: 0, synced_at: null, ts: 0},
-  selectedPositionId: null,
+  polyLive: {configured:false, positions:[], portfolio_value:0, unrealised_pnl:0, total_invested:0, synced_at:null, ts:0},
+  selectedId: null,
 };
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
-function money(value) {
-  const num = Number(value || 0);
-  const sign = num > 0 ? '+' : '';
-  return `${sign}$${Math.abs(num).toFixed(2)}`.replace('$-','$');
+/* ── formatters ── */
+function money(v) {
+  const n = Number(v||0);
+  return `${n>=0?'+':'-'}$${Math.abs(n).toFixed(2)}`;
 }
-function moneyPlain(value) {
-  const num = Number(value || 0);
-  return `${num < 0 ? '-' : ''}$${Math.abs(num).toFixed(2)}`;
+function moneyPlain(v) {
+  const n = Number(v||0);
+  return `${n<0?'-':''}$${Math.abs(n).toFixed(2)}`;
 }
-function pct(value) {
-  return `${(Number(value || 0) * 100).toFixed(1)}%`;
+function pct(v) { return `${(Number(v||0)*100).toFixed(1)}%`; }
+function esc(s) {
+  return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
-function esc(str) {
-  return String(str || '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-}
-function getMergedPositions() {
-  const live      = state.polyLive;
-  const internal  = state.positions.open || [];
-  const liveFresh = live.configured && Array.isArray(live.positions) && (Date.now() - live.ts) < 45000;
+function colorClass(v) { return Number(v)>0?'positive':Number(v)<0?'negative':''; }
+function fmtType(v) { return String(v||'').replaceAll('_',' '); }
 
-  if (!liveFresh) return {open: internal, poly_closed: [], liveFresh: false};
+/* ── merged positions (Polymarket authoritative when fresh) ── */
+function merged() {
+  const live = S.polyLive;
+  const internal = S.positions.open || [];
+  const fresh = live.configured && Array.isArray(live.positions) && (Date.now()-live.ts)<45000;
+  if (!fresh) return {open: internal, liveFresh: false};
 
-  // Index internal positions for metadata (url, type) — Polymarket doesn't return these
-  const byToken  = {};
-  const byMarket = {};
+  const byToken={}, byMkt={};
   for (const p of internal) {
-    if (p.token_id)  byToken[p.token_id]   = p;
-    if (p.market_id) byMarket[p.market_id] = p;
-    if (p.id)        byMarket[p.id]        = p;
+    if (p.token_id) byToken[p.token_id]=p;
+    if (p.id||p.market_id) byMkt[p.id||p.market_id]=p;
   }
-
-  // Polymarket = authoritative open list: price, direction, P&L all come from here
-  const open = live.positions.map((lp) => {
-    const m = byToken[lp.token_id] || byMarket[lp.market_id] || {};
+  const open = live.positions.map(lp => {
+    const m = byToken[lp.token_id]||byMkt[lp.market_id]||{};
     return {
-      question:      lp.question     || m.question  || 'Untitled market',
-      direction:     lp.outcome      || m.direction  || 'YES',   // Polymarket wins
-      price:         lp.avg_price,                               // entry price (avg)
-      current_price: lp.cur_price,                               // live market price
-      size:          lp.initial_value,                           // USD cost basis
-      current_value: lp.current_value,                           // current market value
-      pnl:           lp.pnl,                                     // cashPnl (authoritative)
+      question:      lp.question||m.question||'Untitled',
+      direction:     lp.outcome||m.direction||'YES',
+      price:         lp.avg_price,
+      current_price: lp.cur_price,
+      size:          lp.initial_value,
+      current_value: lp.current_value,
+      pnl:           lp.pnl,
       pnl_pct:       lp.pnl_pct,
-      token_id:      lp.token_id   || '',
-      market_id:     lp.market_id  || m.market_id || '',
-      id:            m.id          || lp.token_id,
-      url:           m.url         || '',
-      type:          m.type        || 'unknown',
-      status:        'open',
+      token_id:      lp.token_id||'',
+      id:            m.id||lp.token_id||m.market_id||'',
+      url:           m.url||'',
+      type:          m.type||'',
       poly_verified: true,
     };
   });
-
-  // Internal positions NOT found on Polymarket = resolved or sold externally
-  const liveTok = new Set(live.positions.map(lp => lp.token_id).filter(Boolean));
-  const liveMkt = new Set(live.positions.map(lp => lp.market_id).filter(Boolean));
-  const poly_closed = internal.filter(p =>
-    !liveTok.has(p.token_id) && !liveMkt.has(p.market_id) && !liveMkt.has(p.id)
-  );
-
-  return {open, poly_closed, liveFresh: true};
-}
-function pnlClass(value) {
-  const num = Number(value || 0);
-  return num > 0 ? 'positive' : num < 0 ? 'negative' : '';
-}
-function statusBadge(text, cls='') {
-  return `<span class="badge ${cls}">${esc(text)}</span>`;
-}
-function formatType(value) {
-  return String(value || 'unknown').replaceAll('_', ' ');
-}
-function pendingCounts(openList) {
-  const pendingOpen = openList.filter((p) => String(p.status || '').includes('pending')).length;
-  const pendingClose = openList.filter((p) => String(p.status || '').includes('closing')).length;
-  return {pendingOpen, pendingClose, total: pendingOpen + pendingClose};
-}
-function buildAlerts() {
-  const alerts = [];
-  const ov = state.overview || {};
-  const openList = state.positions.open || [];
-  const {pendingOpen, pendingClose, total} = pendingCounts(openList);
-  const strategies = Object.values((state.strategies && state.strategies.strategies) || {});
-  const weakCount = strategies.filter((s) => ['weakened','disabled'].includes(s.state)).length;
-
-  if (!ov.bot_running) {
-    alerts.push({kind:'bot', tone:'bad', title:'Bot appears offline', text:'The dashboard did not see a live heartbeat from the bot.'});
-  }
-  if (pendingOpen > 0) {
-    alerts.push({kind:'confirmations', tone:'warn', title:`${pendingOpen} position(s) waiting for open confirmation`, text:'These positions should not be treated as fully live until Polymarket confirms them.'});
-  }
-  if (pendingClose > 0) {
-    alerts.push({kind:'closures', tone:'warn', title:`${pendingClose} position(s) waiting for close confirmation`, text:'Close attempts are being retried until Polymarket confirms closure.'});
-  }
-  if (weakCount > 0) {
-    alerts.push({kind:'strategies', tone:'warn', title:`${weakCount} strategy state change(s)`, text:'At least one strategy is weakened or disabled because recent results are weak.'});
-  }
-  const lossUsed = Number(ov.daily_loss_used || 0);
-  if (lossUsed >= 75) {
-    alerts.push({kind:'risk', tone:'bad', title:'Daily loss usage is high', text:`Used ${lossUsed.toFixed(1)}% of the daily loss budget.`});
-  }
-  if (!alerts.length) {
-    alerts.push({kind:'status', tone:'', title:'No urgent alerts', text:'Bot state, positions, and strategy status look calm right now.'});
-  }
-  return alerts;
+  return {open, liveFresh:true};
 }
 
-function posCard(p, warningLabel) {
-  const dir = p.direction || 'YES';
-  const hasPnl    = p.pnl != null;
-  const pnlPctStr = p.pnl_pct ? `${(p.pnl_pct * 100).toFixed(1)}%` : '';
-  const typeLabel = formatType(p.type || '');
-  const verTag    = warningLabel
-    ? `<span style="color:var(--bad)">${esc(warningLabel)}</span>`
-    : (p.poly_verified
-        ? `<span style="color:var(--good)">Polymarket ✓</span>`
-        : `<span style="color:var(--warn)">Unconfirmed</span>`);
-  const dirColor  = dir === 'YES' ? 'var(--good)' : 'var(--bad)';
-  const closeId   = p.id || p.market_id || '';
-  const closeQ    = (p.question || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  const curVal    = p.current_value != null ? moneyPlain(p.current_value) : '—';
+/* ── sparkline ── */
+function sparkline(history) {
+  let cum = 0;
+  const pts = (history||[]).map(p => { cum+=(p.pnl||0); return cum; });
+  if (pts.length < 2) return {path:'', zeroY:30, color:'var(--muted)'};
+  const min = Math.min(0,...pts), max = Math.max(0,...pts);
+  const range = max-min||1;
+  const W=160, H=60;
+  const path = pts.map((v,i) => {
+    const x = (i/(pts.length-1))*W;
+    const y = H-((v-min)/range)*H;
+    return `${i===0?'M':'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(' ');
+  const zeroY = H-((0-min)/range)*H;
+  const color = cum >= 0 ? 'var(--good)' : 'var(--bad)';
+  return {path, zeroY, color};
+}
+
+/* ── position card ── */
+function posCard(p) {
+  const dir = p.direction||'YES';
+  const dirColor = dir==='YES'?'var(--good)':'var(--bad)';
+  const hasPnl = p.pnl != null;
+  const pnlPctStr = p.pnl_pct ? `${(p.pnl_pct*100).toFixed(1)}%` : '';
+  const typeLabel = fmtType(p.type||'');
+  const verLabel = p.poly_verified
+    ? `<span class="tag good">Polymarket ✓</span>`
+    : `<span class="tag warn">Unconfirmed</span>`;
+  const closeId = esc(p.id||p.market_id||p.token_id||'');
+  const closeQ = (p.question||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
   return `
-  <div class="item pos-card">
-    <div class="item-top">
-      <div style="flex:1;min-width:0">
-        <div class="title" style="font-size:15px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(p.question || 'Untitled market')}</div>
-        <div class="pos-tags">
-          <span style="color:${dirColor};font-weight:600">${esc(dir)}</span>
-          ${verTag}
-          ${typeLabel ? `<span>${esc(typeLabel)}</span>` : ''}
-        </div>
-      </div>
+  <div class="pos-card">
+    <div class="pos-head">
+      <div class="pos-q">${esc(p.question||'Untitled')}</div>
       <div class="pos-pnl">
-        <div class="value-lg ${pnlClass(p.pnl)}">${hasPnl ? money(p.pnl) : moneyPlain(p.size || 0)}</div>
-        ${pnlPctStr ? `<div class="pos-pct ${pnlClass(p.pnl)}">${pnlPctStr}</div>` : ''}
+        <div class="pos-pnl-val ${colorClass(p.pnl)}">${hasPnl?money(p.pnl):moneyPlain(p.size||0)}</div>
+        ${pnlPctStr?`<div class="pos-pnl-pct ${colorClass(p.pnl)}">${pnlPctStr}</div>`:''}
       </div>
     </div>
-    <div class="pos-stats">
-      <span class="ps-item"><span class="ps-l">Entry</span> ${pct(p.price || 0)}</span>
-      <span class="ps-sep">·</span>
-      <span class="ps-item"><span class="ps-l">Now</span> ${pct(p.current_price || 0)}</span>
-      <span class="ps-sep">·</span>
-      <span class="ps-item"><span class="ps-l">In</span> ${moneyPlain(p.size || 0)}</span>
-      <span class="ps-sep">·</span>
-      <span class="ps-item"><span class="ps-l">Val</span> ${curVal}</span>
+    <div class="pos-meta">
+      <span style="color:${dirColor};font-weight:700">${esc(dir)}</span>
+      <span class="pm-sep">·</span>
+      <span><span class="pm-l">Entry</span>${pct(p.price||0)}</span>
+      <span class="pm-sep">·</span>
+      <span><span class="pm-l">Now</span>${pct(p.current_price||0)}</span>
+      <span class="pm-sep">·</span>
+      <span><span class="pm-l">In</span>${moneyPlain(p.size||0)}</span>
+      ${p.current_value!=null?`<span class="pm-sep">·</span><span><span class="pm-l">Val</span>${moneyPlain(p.current_value)}</span>`:''}
     </div>
-    <div class="pos-actions">
-      ${p.url ? `<a class="pos-link" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket ↗</a>` : ''}
-      ${closeId && !warningLabel ? `<button class="btn-close-sm" onclick="openCloseModal('${esc(closeId)}', '${closeQ}')">Close position</button>` : ''}
+    <div class="pos-foot">
+      ${verLabel}
+      ${typeLabel?`<span class="tag">${esc(typeLabel)}</span>`:''}
+      ${p.url?`<a class="pos-link" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket ↗</a>`:''}
+      ${closeId?`<button class="btn-close" onclick="openClose('${closeId}','${closeQ}')">Close</button>`:''}
     </div>
   </div>`;
 }
 
-function renderLivePositions() {
-  const {open, poly_closed, liveFresh} = getMergedPositions();
-  const live    = state.polyLive;
-  const ov      = state.overview || {};
-  const section = $('livePositionsSection');
-  const list    = $('livePositionsList');
-  const syncEl  = $('polySync');
-  const badgeEl = $('polyBadge');
-
-  if (!open.length && !poly_closed.length) { section.style.display = 'none'; return; }
-  section.style.display = 'block';
-
-  if (liveFresh && live.synced_at) {
-    syncEl.innerHTML = `Polymarket <span class="poly-tag"><span class="poly-dot pulse"></span> live · ${esc(live.synced_at)}</span>`;
-  } else {
-    syncEl.textContent = ov.poly_sync_at ? `Polymarket · ${ov.poly_sync_at}` : 'Synced with Polymarket';
-  }
-  const verifiedCount = open.filter(p => p.poly_verified).length;
-  badgeEl.innerHTML = liveFresh
-    ? statusBadge(`${open.length} open · verified`, 'good')
-    : (verifiedCount > 0 ? statusBadge(`${verifiedCount}/${open.length} verified`, 'warn') : '');
-
-  list.innerHTML = [
-    ...open.map(p => posCard(p, null)),
-    ...(poly_closed.length ? [
-      `<div style="margin-top:8px;padding:10px 12px;border-radius:12px;background:rgba(255,69,58,.06);border:1px solid rgba(255,69,58,.2);font-size:13px;color:var(--muted)">
-        <strong style="color:var(--bad)">Resolved / not on Polymarket (${poly_closed.length})</strong>
-        — these positions are in bot memory but no longer on Polymarket. They will disappear after the next bot push.
-      </div>`,
-      ...poly_closed.map(p => posCard(p, 'Not on Polymarket')),
-    ] : []),
-  ].join('');
-}
-
+/* ── render overview ── */
 function renderOverview() {
-  const ov = state.overview || {};
-  const openList = state.positions.open || [];
-  const settings = state.settings || {};
-  const {pendingOpen, pendingClose, total} = pendingCounts(openList);
+  const ov = S.overview||{};
+  const live = S.polyLive;
+  const fresh = live.configured && (Date.now()-live.ts)<45000;
+  const history = S.positions.history||[];
 
-  // Balance — prefer live Polymarket data when fresh (< 45 s)
-  const live      = state.polyLive;
-  const liveFresh = live.configured && live.positions && (Date.now() - live.ts) < 45000;
+  // Balance
+  const portfolioVal = fresh ? (live.portfolio_value||0) : (ov.portfolio_value||0);
+  const total = Number(ov.bankroll||0);
+  const cash = Math.max(0, total-portfolioVal);
+  $('balVal').textContent = total>0 ? moneyPlain(total) : '—';
+  const syncLabel = (fresh&&live.synced_at) ? `Synced ${live.synced_at}` : (ov.poly_sync_at?`Synced ${ov.poly_sync_at}`:'');
+  const modeLabel = ov.dry_run ? 'Dry run' : 'Live trading';
+  $('balSub').textContent = [ov.bot_running?'Online':'Offline', modeLabel, syncLabel].filter(Boolean).join(' · ');
 
-  // ov.bankroll = total capital (cash + unrealised PnL from internal model).
-  // portfolioVal = current market value of open positions (from Polymarket live).
-  // cashBalance  = total − positions (what's not currently deployed).
-  // totalBalance = ov.bankroll (already the correct total — do NOT add portfolioVal again).
-  const portfolioVal = liveFresh ? (live.portfolio_value || 0) : (ov.portfolio_value || 0);
-  const totalBalance = Number(ov.bankroll || 0);
-  const cashBalance  = Math.max(0, totalBalance - portfolioVal);
+  let balRowsHtml = '';
+  if (fresh && portfolioVal>0) {
+    const upnl = live.unrealised_pnl||0;
+    balRowsHtml = `
+      <div class="brow"><span class="bl">Cash</span><span class="bv">${moneyPlain(cash)}</span></div>
+      <div class="brow"><span class="bl">Positions</span><span class="bv">${moneyPlain(portfolioVal)}</span></div>
+      <div class="brow"><span class="bl">Unrealised</span><span class="bv ${colorClass(upnl)}">${money(upnl)}</span></div>`;
+  }
+  $('balRows').innerHTML = balRowsHtml;
+  $('balRows').style.display = balRowsHtml ? '' : 'none';
 
-  $('heroBankroll').textContent = totalBalance > 0 ? moneyPlain(totalBalance) : '—';
-  const syncTime = (liveFresh && live.synced_at) ? ` · Polymarket ${live.synced_at}` : (ov.poly_sync_at ? ` · Polymarket ${ov.poly_sync_at}` : '');
-  $('heroSubtitle').textContent = `${ov.bot_running ? 'Bot is running' : 'Bot is not running'} · ${ov.dry_run ? 'dry run' : 'live trading'} · ${Number(ov.total_trades || 0)} trades${syncTime}`;
+  // Sparkline
+  const {path, zeroY, color} = sparkline(history);
+  const totalPnl = Number(ov.pnl_total||0);
+  $('sparkVal').textContent = money(totalPnl);
+  $('sparkVal').className = `spark-val ${colorClass(totalPnl)}`;
+  $('sparkPath').setAttribute('d', path||'');
+  $('sparkPath').setAttribute('stroke', path ? color : 'transparent');
+  $('sparkZero').setAttribute('y1', zeroY.toFixed(1));
+  $('sparkZero').setAttribute('y2', zeroY.toFixed(1));
 
-  // Balance breakdown — cash + open positions + unrealised P&L
-  const breakdown = $('balanceBreakdown');
-  if (liveFresh && (portfolioVal > 0 || live.unrealised_pnl !== 0)) {
-    const upnl = live.unrealised_pnl || 0;
-    breakdown.style.display = '';
-    breakdown.innerHTML = `
-      <div class="brow"><span class="bl">Cash balance</span><span class="bv">${moneyPlain(cashBalance)}</span></div>
-      <div class="brow"><span class="bl">Open positions (${live.position_count || 0})</span><span class="bv">${moneyPlain(portfolioVal)}</span></div>
-      <div class="brow"><span class="bl">Unrealised P&amp;L</span><span class="bv ${pnlClass(upnl)}">${money(upnl)}</span></div>
-      <div class="brow" style="border-color:rgba(255,255,255,.12)"><span class="bl" style="color:var(--soft)">Total assets</span><span class="bv">${moneyPlain(totalBalance)}</span></div>`;
+  // Metrics
+  const today = Number(ov.pnl_today||0);
+  $('mToday').textContent = money(today);
+  $('mToday').className = `mv ${colorClass(today)}`;
+  $('mTodaySub').textContent = 'PnL today';
+  $('mTotal').textContent = money(totalPnl);
+  $('mTotal').className = `mv ${colorClass(totalPnl)}`;
+  $('mTotalSub').textContent = 'All time';
+  const {open:openList} = merged();
+  $('mOpen').textContent = String(fresh ? openList.length : (ov.open_positions||0));
+  $('mOpenSub').textContent = `$${Number(ov.open_exposure||0).toFixed(0)} exposed`;
+  const wr = Number(ov.win_rate||0);
+  $('mWin').textContent = wr>0 ? pct(wr) : '—';
+  $('mWinSub').textContent = `${ov.total_trades||0} trades`;
+
+  // Alerts
+  const alerts = buildAlerts();
+  const realAlerts = alerts.filter(a=>a.tone);
+  const wrap = $('alertsWrap');
+  if (realAlerts.length) {
+    wrap.innerHTML = realAlerts.map(a=>`
+      <div class="alert-item ${a.tone}">
+        <div class="alert-icon">${a.tone==='bad'?'🔴':'⚠️'}</div>
+        <div>
+          <div class="alert-title">${esc(a.title)}</div>
+          <div class="alert-text">${esc(a.text)}</div>
+        </div>
+      </div>`).join('');
   } else {
-    breakdown.style.display = 'none';
+    wrap.innerHTML = '';
   }
 
-  $('metricDay').textContent = money(ov.pnl_today || 0);
-  $('metricDay').className = `value ${pnlClass(ov.pnl_today)}`;
-  $('metricTotal').textContent = money(ov.pnl_total || 0);
-  $('metricTotal').className = `value ${pnlClass(ov.pnl_total)}`;
-  const {open: liveOpen} = getMergedPositions();
-  $('metricOpen').textContent = String(liveFresh ? liveOpen.length : (ov.open_positions || openList.length || 0));
-  $('metricOpenSub').textContent = liveFresh
-    ? `Value ${moneyPlain(live.portfolio_value || 0)}`
-    : `Exposure ${moneyPlain(ov.open_exposure || 0)}`;
-
-  // Portfolio metric card
-  $('metricPortfolio').textContent = portfolioVal > 0 ? moneyPlain(portfolioVal) : (cashBalance > 0 ? moneyPlain(cashBalance) : '—');
-  $('metricPortfolioSub').textContent = liveFresh
-    ? `Invested ${moneyPlain(live.total_invested || 0)}`
-    : (portfolioVal > 0 ? `Invested ${moneyPlain(ov.total_invested || 0)}`
-      : (openList.length ? 'Fetching from Polymarket…' : 'No open positions'));
-
-  const upnlVal = ov.unrealised_pnl || 0;
-  const heroBadges = [
-    statusBadge(ov.bot_running ? 'Online' : 'Offline', ov.bot_running ? 'good' : 'bad'),
-    statusBadge(ov.dry_run ? 'Dry run' : 'Live', ov.dry_run ? '' : 'warn'),
-    statusBadge(`Win rate ${pct(ov.win_rate || 0)}`),
-    statusBadge(`Unrealised ${money(upnlVal)}`, pnlClass(upnlVal) === 'positive' ? 'good' : pnlClass(upnlVal) === 'negative' ? 'bad' : ''),
-    ...(ov.poly_sync_at ? [statusBadge(`Synced ${ov.poly_sync_at}`, 'good')] : []),
-  ];
-  $('heroBadges').innerHTML = heroBadges.join('');
-
-  const importantSettings = [
-    ['Max position', moneyPlain(settings?.risk?.max_position_usd || 0)],
-    ['Min position', moneyPlain(settings?.risk?.min_position_usd || 0)],
-    ['Max open', String(settings?.risk?.max_open_positions ?? '—')],
-    ['Daily loss limit', moneyPlain(settings?.risk?.max_daily_loss_usd || 0)],
-    ['AI mode', settings?.engine?.ai_mode || '—'],
-    ['Scan interval', `${settings?.engine?.scan_interval_sec ?? '—'} sec`],
-  ];
-  $('riskSnapshot').innerHTML = importantSettings.map(([label, value]) => `
-    <div class="item snap-item">
-      <div class="snap-l">${esc(label)}</div>
-      <div class="snap-v">${esc(value)}</div>
-    </div>`).join('');
-
-  const alerts = buildAlerts();
-  $('alertsList').innerHTML = alerts.map((a) => `
-    <div class="alert ${a.tone}">
-      <div class="top">
-        <div class="kind">${esc(a.kind)}</div>
-      </div>
-      <div class="title">${esc(a.title)}</div>
-      <div class="compact">${esc(a.text)}</div>
-    </div>
-  `).join('');
-
-  // Render live positions panel on overview
-  renderLivePositions();
-
-  const signals = (state.signals.signals || []).slice(0, 5);
-  $('entryIdeas').innerHTML = signals.length ? signals.map((s) => {
-    const dirColor = s.direction === 'YES' ? 'var(--good)' : s.direction === 'NO' ? 'var(--bad)' : 'var(--muted)';
-    return `
-    <div class="item pos-card">
-      <div class="item-top">
-        <div style="flex:1;min-width:0">
-          <div class="title" style="font-size:15px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(s.question || 'Untitled market')}</div>
-          <div class="pos-tags">
-            <span style="color:${dirColor};font-weight:600">${esc(s.direction || 'NEUTRAL')}</span>
-            <span>${esc(formatType(s.type || 'signal'))}</span>
-            ${s.time ? `<span>${esc(s.time)}</span>` : ''}
-          </div>
+  // Signals
+  const sigs = (S.signals.signals||[]).slice(0,3);
+  if (sigs.length) {
+    $('sigCard').style.display='';
+    $('sigList').innerHTML = sigs.map(s=>{
+      const dc = s.direction==='YES'?'var(--good)':s.direction==='NO'?'var(--bad)':'var(--muted)';
+      return `<div class="sig-row">
+        <div class="sig-q">${esc(s.question||'')}</div>
+        <div class="sig-right">
+          <div class="sig-dir" style="color:${dc}">${esc(s.direction||'—')}</div>
+          <div class="sig-edge">Edge ${pct(s.edge||0)}</div>
         </div>
-        <div class="pos-pnl">
-          <div style="font-size:17px;font-weight:650;letter-spacing:-.03em">${pct(s.prob || 0)}</div>
-          <div class="pos-pct">Edge ${pct(s.edge || 0)}</div>
-        </div>
-      </div>
-      <div class="pos-stats">
-        <span class="ps-item"><span class="ps-l">Confidence</span> ${esc(s.confidence || 'n/a')}</span>
-        ${s.detail ? `<span class="ps-sep">·</span><span class="ps-item" style="white-space:normal">${esc(s.detail)}</span>` : ''}
-      </div>
-    </div>`;
-  }).join('') : `<div class="empty">No fresh entry ideas yet.</div>`;
+      </div>`;
+    }).join('');
+  } else {
+    $('sigCard').style.display='none';
+  }
 }
 
+/* ── render positions tab ── */
 function renderPositions() {
-  const {open: openList, poly_closed} = getMergedPositions();
-  const closedToday = state.positions.closed_today || [];
-
-  $('openPositions').innerHTML = [
-    ...openList.map((p) => posCard(p, null)),
-    ...(poly_closed.length ? [
-      `<div style="margin-top:8px;padding:10px 12px;border-radius:12px;background:rgba(255,69,58,.06);border:1px solid rgba(255,69,58,.2);font-size:13px;color:var(--muted)">
-        <strong style="color:var(--bad)">Not on Polymarket (${poly_closed.length})</strong>
-        — resolved or sold. Will clear after next bot push.
-      </div>`,
-      ...poly_closed.map(p => posCard(p, 'Not on Polymarket')),
-    ] : []),
-  ].join('') || `<div class="empty">No open positions.</div>`;
-
-  $('closedToday').innerHTML = closedToday.length ? closedToday.map((p) => {
-    const dirColor = (p.direction || 'YES') === 'YES' ? 'var(--good)' : 'var(--bad)';
-    return `
-    <div class="item pos-card">
-      <div class="item-top">
-        <div style="flex:1;min-width:0">
-          <div class="title" style="font-size:15px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(p.question || 'Untitled market')}</div>
-          <div class="pos-tags">
-            <span style="color:${dirColor};font-weight:600">${esc(p.direction || '—')}</span>
-            <span>${esc(formatType(p.type || 'unknown'))}</span>
+  const {open} = merged();
+  const closed = S.positions.closed_today||[];
+  $('openList').innerHTML = open.length
+    ? open.map(posCard).join('')
+    : '<div class="empty">No open positions.</div>';
+  $('closedList').innerHTML = closed.length
+    ? closed.map(p=>{
+        const dc=(p.direction||'YES')==='YES'?'var(--good)':'var(--bad)';
+        return `<div class="pos-card">
+          <div class="pos-head">
+            <div class="pos-q">${esc(p.question||'Untitled')}</div>
+            <div class="pos-pnl">
+              <div class="pos-pnl-val ${colorClass(p.pnl)}">${money(p.pnl||0)}</div>
+              <div class="pos-pnl-pct">${moneyPlain(p.size||0)}</div>
+            </div>
           </div>
-        </div>
-        <div class="pos-pnl">
-          <div class="value-lg ${pnlClass(p.pnl)}">${money(p.pnl || 0)}</div>
-          <div class="pos-pct">Size ${moneyPlain(p.size || 0)}</div>
-        </div>
-      </div>
-    </div>`;
-  }).join('') : `<div class="empty">Nothing closed today yet.</div>`;
+          <div class="pos-meta">
+            <span style="color:${dc};font-weight:700">${esc(p.direction||'—')}</span>
+            <span class="pm-sep">·</span>
+            <span>${esc(fmtType(p.type||''))}</span>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div class="empty">Nothing closed today.</div>';
 }
 
-function renderStrategies() {
-  const strategies = state.strategies.strategies || {};
-  const items = Object.values(strategies);
-  $('strategyList').innerHTML = items.length ? items.map((s) => {
-    const stateColor = s.state === 'active' ? 'var(--good)' : s.state === 'disabled' ? 'var(--bad)' : 'var(--warn)';
-    const reasonNote = s.last_reason ? String(s.last_reason).replaceAll('_', ' ') : '';
-    return `
-    <div class="item pos-card">
-      <div class="item-top">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:15px;font-weight:590;line-height:1.3">${esc(formatType(s.name || 'strategy'))}</div>
-          <div class="pos-tags">
-            <span style="color:${stateColor};font-weight:600">${esc(s.state || 'active')}</span>
-            <span>×${Number(s.size_multiplier || 1).toFixed(2)} size</span>
-            <span>${esc(s.trades || 0)} trades</span>
-          </div>
-        </div>
-        <div class="pos-pnl">
-          <div class="value-lg ${pnlClass(s.pnl)}">${money(s.pnl || 0)}</div>
-          <div class="pos-pct">Win ${pct(s.win_rate || 0)}</div>
-        </div>
-      </div>
-      <div class="pos-stats">
-        <span class="ps-item"><span class="ps-l">Volume</span> ${moneyPlain(s.volume || 0)}</span>
-        <span class="ps-sep">·</span>
-        <span class="ps-item"><span class="ps-l">ROI</span> <span class="${pnlClass(s.roi)}">${pct(s.roi || 0)}</span></span>
-        <span class="ps-sep">·</span>
-        <span class="ps-item"><span class="ps-l">Changes</span> ${esc(s.weaken_count || 0)}</span>
-        ${reasonNote ? `<span class="ps-sep">·</span><span class="ps-item"><span class="ps-l">Last</span> ${esc(reasonNote)}</span>` : ''}
-        ${s.disabled_until ? `<span class="ps-sep">·</span><span class="ps-item"><span class="ps-l">Until</span> ${esc(s.disabled_until)}</span>` : ''}
-      </div>
-    </div>`;
-  }).join('') : `<div class="empty">No strategy stats yet.</div>`;
-}
-
+/* ── render history ── */
 function renderHistory() {
-  const rows = (state.positions.history || []).slice().reverse().slice(0, 100);
-  $('historyRows').innerHTML = rows.length ? rows.map((p) => `
-    <tr>
-      <td>${esc((p.question || '').slice(0, 90) || 'Untitled market')}</td>
-      <td class="muted">${esc(formatType(p.type || 'unknown'))}</td>
-      <td>${esc(p.direction || '—')}</td>
-      <td>${moneyPlain(p.size || 0)}</td>
-      <td class="${pnlClass(p.pnl)}">${money(p.pnl || 0)}</td>
-    </tr>
-  `).join('') : `<tr><td colspan="5" class="empty">No history yet.</td></tr>`;
+  const rows = (S.positions.history||[]).slice().reverse().slice(0,100);
+  $('histRows').innerHTML = rows.length
+    ? rows.map(p=>`
+        <tr>
+          <td style="max-width:300px">${esc((p.question||'').slice(0,80))}</td>
+          <td><span style="color:${(p.direction||'YES')==='YES'?'var(--good)':'var(--bad)'};font-weight:600">${esc(p.direction||'—')}</span></td>
+          <td style="color:var(--muted)">${esc(fmtType(p.type||''))}</td>
+          <td>${moneyPlain(p.size||0)}</td>
+          <td class="right ${colorClass(p.pnl)}">${money(p.pnl||0)}</td>
+        </tr>`).join('')
+    : '<tr><td colspan="5" class="empty">No history yet.</td></tr>';
 }
 
+/* ── render strategies ── */
+function renderStrategies() {
+  const strats = Object.values(S.strategies.strategies||{});
+  $('stratList').innerHTML = strats.length
+    ? strats.map(s=>{
+        const sc = s.state==='active'?'var(--good)':s.state==='disabled'?'var(--bad)':'var(--warn)';
+        return `<div class="strat-row">
+          <div>
+            <div class="strat-name">${esc(fmtType(s.name||'strategy'))}</div>
+            <div class="strat-state" style="color:${sc}">${esc(s.state||'active')} · ×${Number(s.size_multiplier||1).toFixed(2)} size · ${s.trades||0} trades</div>
+          </div>
+          <div class="strat-nums">
+            <div class="strat-pnl ${colorClass(s.pnl)}">${money(s.pnl||0)}</div>
+            <div class="strat-sub">WR ${pct(s.win_rate||0)} · ROI ${pct(s.roi||0)}</div>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div class="empty">No strategy stats yet.</div>';
+}
+
+/* ── render settings ── */
 function renderSettings() {
-  const s = state.settings || {};
-  const groups = [
-    {
-      title:'Risk',
-      rows:[
-        ['Bankroll', moneyPlain(s?.risk?.bankroll || 0)],
-        ['Max position', moneyPlain(s?.risk?.max_position_usd || 0)],
-        ['Min position', moneyPlain(s?.risk?.min_position_usd || 0)],
-        ['Max open positions', String(s?.risk?.max_open_positions ?? '—')],
-        ['Max daily loss', moneyPlain(s?.risk?.max_daily_loss_usd || 0)],
-      ],
-    },
-    {
-      title:'Engine',
-      rows:[
-        ['AI mode', s?.engine?.ai_mode || '—'],
-        ['Scan interval', `${s?.engine?.scan_interval_sec ?? '—'} sec`],
-        ['Min trade quality', String(s?.engine?.min_trade_quality ?? '—')],
-        ['Near resolution', s?.engine?.enable_near_resolution ? 'On' : 'Off'],
-      ],
-    },
-    {
-      title:'Strategy control',
-      rows:[
-        ['Min trades', String(s?.strategy_control?.strategy_min_trades ?? '—')],
-        ['Weak win rate', pct(s?.strategy_control?.strategy_weak_win_rate || 0)],
-        ['Re-enable days', String(s?.strategy_control?.strategy_reenable_days ?? '—')],
-        ['Weakened size multiplier', `×${Number(s?.strategy_control?.strategy_weakened_size_mult || 0).toFixed(2)}`],
-        ['All weak min size', moneyPlain(s?.strategy_control?.all_strategies_weak_min_usd || 0)],
-      ],
-    },
-    {
-      title:'Security',
-      rows:[
-        ['Dashboard key', s?.security?.dashboard_key_set ? 'Configured' : 'Missing'],
-        ['Manual close key', s?.security?.manual_close_key_set ? 'Configured' : 'Missing'],
-      ],
-    },
-  ];
-  $('settingsGrid').innerHTML = groups.map((g) => `
-    <div class="setting-group">
-      <h3>${esc(g.title)}</h3>
-      ${g.rows.map(([k,v]) => `<div class="setting"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}
-    </div>
-  `).join('');
+  const s = S.settings||{};
+  function rows(pairs) {
+    return `<div class="sg">${pairs.map(([k,v])=>`
+      <div class="srow"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join('')}</div>`;
+  }
+  $('sgRisk').innerHTML = rows([
+    ['Bankroll', moneyPlain(s?.risk?.bankroll||0)],
+    ['Max position', moneyPlain(s?.risk?.max_position_usd||0)],
+    ['Max open positions', String(s?.risk?.max_open_positions??'—')],
+    ['Max daily loss', moneyPlain(s?.risk?.max_daily_loss_usd||0)],
+  ]).replace('<div class="sg">','').replace(/<\/div>$/,'');
+  $('sgEngine').innerHTML = rows([
+    ['AI mode', s?.engine?.ai_mode||'—'],
+    ['Scan interval', `${s?.engine?.scan_interval_sec??'—'} sec`],
+    ['Min trade quality', String(s?.engine?.min_trade_quality??'—')],
+  ]).replace('<div class="sg">','').replace(/<\/div>$/,'');
+  $('sgSec').innerHTML = rows([
+    ['Dashboard key', s?.security?.dashboard_key_set?'Configured':'Missing'],
+    ['Manual close key', s?.security?.manual_close_key_set?'Configured':'Missing'],
+  ]).replace('<div class="sg">','').replace(/<\/div>$/,'');
 }
 
+/* ── alerts ── */
+function buildAlerts() {
+  const ov = S.overview||{};
+  const open = S.positions.open||[];
+  const strats = Object.values((S.strategies&&S.strategies.strategies)||{});
+  const alerts = [];
+  const pendingOpen = open.filter(p=>String(p.status||'').includes('pending')).length;
+  const pendingClose = open.filter(p=>String(p.status||'').includes('closing')).length;
+  const weakCount = strats.filter(s=>['weakened','disabled'].includes(s.state)).length;
+  if (!ov.bot_running) alerts.push({tone:'bad', title:'Bot offline', text:'No heartbeat received from the bot.'});
+  if (pendingOpen>0) alerts.push({tone:'warn', title:`${pendingOpen} position(s) awaiting open confirmation`, text:'Not fully live until Polymarket confirms.'});
+  if (pendingClose>0) alerts.push({tone:'warn', title:`${pendingClose} position(s) awaiting close confirmation`, text:'Close retries in progress.'});
+  if (weakCount>0) alerts.push({tone:'warn', title:`${weakCount} strategy weakened or disabled`, text:'Recent results triggered automatic adjustment.'});
+  const loss = Number(ov.daily_loss_used||0);
+  if (loss>=75) alerts.push({tone:'bad', title:'Daily loss limit almost reached', text:`${loss.toFixed(0)}% of daily loss budget used.`});
+  return alerts;
+}
+
+/* ── render all ── */
 function renderAll() {
   renderOverview();
   renderPositions();
-  renderStrategies();
   renderHistory();
+  renderStrategies();
   renderSettings();
-
-  const online = !!state.overview.bot_running;
+  const online = !!S.overview.bot_running;
   $('liveDot').style.background = online ? 'var(--good)' : 'var(--bad)';
-  $('liveText').textContent = online ? 'Bot online' : 'Bot offline';
+  $('liveText').textContent = online ? 'Online' : 'Offline';
 }
 
-async function fetchJSON(url) {
-  const res = await fetch(url, {cache:'no-store'});
-  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
-  return res.json();
+/* ── fetch ── */
+async function json(url) {
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(`${url} ${r.status}`);
+  return r.json();
 }
-
-async function fetchPolyLive() {
+async function fetchLive() {
   try {
-    const data = await fetchJSON('/api/polymarket_live');
-    state.polyLive = {...data, ts: Date.now()};
-  } catch (err) {
-    console.warn('polyLive fetch error:', err);
-  }
+    const d = await json('/api/polymarket_live');
+    S.polyLive = {...d, ts:Date.now()};
+  } catch(e) { console.warn('polyLive:', e); }
 }
-
 async function refresh() {
   try {
-    const [overview, positions, signals, learning, strategies, settings] = await Promise.all([
-      fetchJSON('/api/overview'),
-      fetchJSON('/api/positions'),
-      fetchJSON('/api/signals'),
-      fetchJSON('/api/learning'),
-      fetchJSON('/api/strategies'),
-      fetchJSON('/api/settings'),
+    const [ov,pos,sig,learn,strat,cfg] = await Promise.all([
+      json('/api/overview'), json('/api/positions'), json('/api/signals'),
+      json('/api/learning'), json('/api/strategies'), json('/api/settings'),
     ]);
-    state.overview = overview || {};
-    state.positions = positions || {};
-    state.signals = signals || {};
-    state.learning = learning || {};
-    state.strategies = strategies || {strategies: learning?.strategy_stats || {}};
-    if ((!state.strategies.strategies || !Object.keys(state.strategies.strategies).length) && learning?.strategy_stats) {
-      state.strategies = {strategies: learning.strategy_stats};
-    }
-    state.settings = settings || {};
-    // Render immediately with internal data, then update with live Polymarket data
+    S.overview = ov||{};
+    S.positions = pos||{};
+    S.signals = sig||{};
+    S.learning = learn||{};
+    S.strategies = strat||{};
+    if (!Object.keys(S.strategies.strategies||{}).length && learn?.strategy_stats)
+      S.strategies = {strategies: learn.strategy_stats};
+    S.settings = cfg||{};
     renderAll();
-    fetchPolyLive().then(() => { renderOverview(); renderLivePositions(); });
-  } catch (err) {
+    fetchLive().then(()=>{ renderOverview(); renderPositions(); });
+  } catch(e) {
     $('liveDot').style.background = 'var(--warn)';
-    $('liveText').textContent = 'Load error';
-    console.error(err);
+    $('liveText').textContent = 'Error';
+    console.error(e);
   }
 }
 
-document.querySelectorAll('.tab').forEach((btn) => {
+/* ── tabs ── */
+document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((el) => el.classList.remove('active'));
-    document.querySelectorAll('.tab-pane').forEach((el) => el.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
     btn.classList.add('active');
     $(btn.dataset.tab).classList.add('active');
   });
 });
 
-window.openCloseModal = function(positionId, question) {
-  state.selectedPositionId = positionId;
+/* ── manual close modal ── */
+window.openClose = function(id, q) {
+  S.selectedId = id;
   $('closeModal').style.display = 'flex';
-  $('closePrompt').textContent = `Enter the manual close key to close: ${question || 'selected position'}`;
-  $('closeKeyInput').value = '';
+  $('closePrompt').textContent = `Close: ${q||'selected position'}`;
+  $('closeKey').value = '';
   $('closeResult').textContent = '';
-  $('closeKeyInput').focus();
+  $('closeKey').focus();
 };
-
-function hideCloseModal() {
-  $('closeModal').style.display = 'none';
-  state.selectedPositionId = null;
-}
-$('closeCancel').addEventListener('click', hideCloseModal);
-$('closeModal').addEventListener('click', (e) => {
-  if (e.target.id === 'closeModal') hideCloseModal();
-});
-
+function hideClose() { $('closeModal').style.display='none'; S.selectedId=null; }
+$('closeCancel').addEventListener('click', hideClose);
+$('closeModal').addEventListener('click', e=>{ if(e.target.id==='closeModal') hideClose(); });
 $('closeConfirm').addEventListener('click', async () => {
-  const key = $('closeKeyInput').value.trim();
-  if (!state.selectedPositionId || !key) {
-    $('closeResult').textContent = 'Manual close key is required.';
-    return;
-  }
+  const key = $('closeKey').value.trim();
+  if (!S.selectedId||!key) { $('closeResult').textContent='Key required.'; return; }
   $('closeConfirm').disabled = true;
-  $('closeResult').textContent = 'Closing...';
+  $('closeResult').textContent = 'Closing…';
   try {
-    const res = await fetch('/api/close_position', {
+    const r = await fetch('/api/close_position', {
       method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-manual-close-key': key,
-      },
-      body: JSON.stringify({market_id: state.selectedPositionId}),
+      headers:{'Content-Type':'application/json','x-manual-close-key':key},
+      body: JSON.stringify({market_id: S.selectedId}),
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      throw new Error(data.error || `HTTP ${res.status}`);
-    }
-    $('closeResult').textContent = 'Position closed. Refreshing...';
+    const d = await r.json();
+    if (!r.ok||!d.ok) throw new Error(d.error||`HTTP ${r.status}`);
+    $('closeResult').textContent = 'Closed. Refreshing…';
     await refresh();
-    setTimeout(hideCloseModal, 700);
-  } catch (err) {
-    $('closeResult').textContent = `Failed: ${err.message}`;
+    setTimeout(hideClose, 600);
+  } catch(e) {
+    $('closeResult').textContent = `Failed: ${e.message}`;
   } finally {
     $('closeConfirm').disabled = false;
   }

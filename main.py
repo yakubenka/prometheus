@@ -1200,7 +1200,7 @@ class Prometheus:
                     "current_price": current_price,
                     "size":          p.size_usd,
                     "pnl":           upnl,
-                    "pnl_pct":       round(poly_pos.pnl_pct, 3) if poly_pos else 0.0,
+                    "pnl_pct":       round(poly_pos.pnl_pct / 100, 4) if poly_pos else 0.0,
                     "poly_verified": poly_pos is not None,
                     "age":           "now",
                     "tags":          p.tags,
