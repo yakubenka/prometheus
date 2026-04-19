@@ -418,6 +418,10 @@ class Prometheus:
                 self._push_to_api()
         except Exception as e:
             log.warning(f"Pending close retry error: {e}")
+        try:
+            self.resolver.retry_pending_redeems()
+        except Exception as e:
+            log.warning(f"Pending redeem retry error: {e}")
 
     def _resolve_positions(self) -> None:
         closed = self.resolver.run()

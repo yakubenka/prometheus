@@ -13,14 +13,29 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 import requests
 
-from datetime import datetime, timezone
 from data import fetch_current_price
 from risk import Position
 from config import cfg
+
+
+@dataclass
+class PendingRedeem:
+    market_id:    str
+    token_id:     str
+    shares:       float
+    question:     str
+    pnl:          float
+    slug:         str
+    attempts:     int   = 0
+    max_attempts: int   = 5          # всего 5 попыток (~25 минут)
+    interval_sec: int   = 300        # повтор каждые 5 минут
+    next_retry_at: float = field(default_factory=lambda: time.time() + 300)
 
 
 def sell_position_on_polymarket(token_id: str, shares: float,
@@ -409,6 +424,71 @@ class PositionResolver:
         self.risk = risk_manager
         self.tg   = telegram
         self._signal_outcomes: list[dict] = []
+        self._pending_redeems: list[PendingRedeem] = []
+
+    def retry_pending_redeems(self) -> None:
+        """Повторные попытки клейма выигрышей. Вызывать каждый цикл."""
+        if not self._pending_redeems:
+            return
+        poly_key = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+        now = time.time()
+        still_pending = []
+        for pr in self._pending_redeems:
+            if now < pr.next_retry_at:
+                still_pending.append(pr)
+                continue
+            pr.attempts += 1
+            log.info(
+                f"♻️ Redeem retry {pr.attempts}/{pr.max_attempts}: "
+                f"market={pr.market_id[:12]} pnl=+${pr.pnl:.2f}"
+            )
+            ok = redeem_winning_position(
+                market_id = pr.market_id,
+                token_id  = pr.token_id,
+                shares    = pr.shares,
+                poly_key  = poly_key,
+            )
+            if ok:
+                log.info(f"✅ Redeem succeeded on retry {pr.attempts}: {pr.question[:60]}")
+                if self.tg:
+                    try:
+                        self.tg.send(
+                            f"✅ *Выигрыш успешно получен* (попытка {pr.attempts})\n\n"
+                            f"*{pr.question[:70]}*\n"
+                            f"Выигрыш: *+${pr.pnl:.2f}*"
+                        )
+                    except Exception:
+                        pass
+            elif pr.attempts >= pr.max_attempts:
+                log.warning(f"⚠️ Redeem окончательно не удался после {pr.attempts} попыток: {pr.question[:60]}")
+                self._send_manual_redeem_notice(pr)
+            else:
+                pr.next_retry_at = time.time() + pr.interval_sec
+                still_pending.append(pr)
+        self._pending_redeems = still_pending
+
+    def _send_manual_redeem_notice(self, pr: PendingRedeem) -> None:
+        """Уведомление о необходимости ручного клейма (только после исчерпания всех попыток)."""
+        if not self.tg:
+            return
+        try:
+            import urllib.parse as _up
+            url = (f"https://polymarket.com/event/{pr.slug}"
+                   if pr.slug
+                   else f"https://polymarket.com/?s={_up.quote(pr.question[:80])}")
+            msg = (
+                f"⚠️ *Redeem не удался*\n\n"
+                f"*{pr.question[:70]}*\n\n"
+                f"Выигрыш: *+${pr.pnl:.2f}*\n"
+                f"Зайди и клейм вручную:\n"
+                f"🔗 [Открыть на Polymarket]({url})"
+            )
+            if hasattr(self.tg, "send"):
+                self.tg.send(msg)
+            else:
+                self.tg(msg)
+        except Exception:
+            pass
 
     def _notify(self, pos, outcome: str, won: bool, pnl: float,
                 exit_price: float, loss_pct: float = None) -> None:
@@ -551,29 +631,19 @@ class PositionResolver:
                         )
                         if not ok:
                             log.warning(
-                                f"⚠️ Redeem не удался для {pos.market_id[:16]} — "
-                                f"нужно клеймить вручную на Polymarket"
+                                f"⚠️ Redeem не удался — ставим в очередь повторных попыток: "
+                                f"{pos.market_id[:16]}"
                             )
-                            if self.tg:
-                                try:
-                                    import urllib.parse as _up
-                                    slug = getattr(pos, 'slug', None)
-                                    url  = (f"https://polymarket.com/event/{slug}"
-                                            if slug
-                                            else f"https://polymarket.com/?s={_up.quote((pos.question or '')[:80])}")
-                                    msg = (
-                                        f"⚠️ *Redeem не удался*\n\n"
-                                        f"*{pos.question[:70]}*\n\n"
-                                        f"Выигрыш: *+${closed.pnl:.2f}*\n"
-                                        f"Зайди и клейм вручную:\n"
-                                        f"🔗 [Открыть на Polymarket]({url})"
-                                    )
-                                    if hasattr(self.tg, "send"):
-                                        self.tg.send(msg)
-                                    else:
-                                        self.tg(msg)
-                                except Exception:
-                                    pass
+                            # Не уведомляем сразу — добавляем в очередь повторов
+                            self._pending_redeems.append(PendingRedeem(
+                                market_id    = pos.market_id,
+                                token_id     = pos.token_id,
+                                shares       = shares,
+                                question     = pos.question or "",
+                                pnl          = closed.pnl,
+                                slug         = getattr(pos, "slug", "") or "",
+                                next_retry_at = time.time() + 300,  # первый повтор через 5 мин
+                            ))
                 continue
 
             # 2. Time-based exit: рынок закрывается менее чем через N часов
