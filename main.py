@@ -185,6 +185,7 @@ class Prometheus:
             max_position_usd   = cfg.max_pos_usd,
             max_daily_loss_usd = cfg.max_daily_loss,
             max_open_positions = cfg.max_open,
+            max_correlated_usd = cfg.max_correlated,
             kelly_fraction     = cfg.kelly_frac,
             data_dir           = cfg.logs_dir,
         )

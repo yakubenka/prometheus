@@ -51,6 +51,7 @@ class Config:
     max_pos_usd:    float = _f("MAX_POSITION_USD", 10.0)
     max_daily_loss: float = _f("MAX_DAILY_LOSS_USD", 50.0)
     max_open:       int   = _i("MAX_OPEN_POSITIONS", 10)
+    max_correlated: float = _f("MAX_CORRELATED_USD", 35.0)
     kelly_frac:     float = _f("KELLY_FRACTION", 0.20)
 
     min_edge:       float = _f("MIN_EDGE", 0.05)
