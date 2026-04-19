@@ -608,7 +608,7 @@ class SignalEngine:
         return int(max(0, min(100, round(score))))
 
     def _external_support_count(self, direction: str, signals: list[Signal]) -> int:
-        if direction == "NEUTRAL":
+        if direction == "NEUTRAL" or not signals:
             return 0
         return sum(
             1 for s in signals

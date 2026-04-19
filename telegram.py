@@ -205,9 +205,11 @@ class Telegram:
         pnl_str  = f"+${pnl:.2f}" if won else f"−${abs(pnl):.2f}"
         strategy = _STRATEGY_LABELS.get(signal_type, signal_type.replace("_", " ").title())
 
-        # Движение цены
-        move = exit_price - entry_price
-        move_str = f"{'+' if move >= 0 else ''}{move:.3f}  ({'+' if move >= 0 else ''}{move/max(entry_price,0.001)*100:.1f}%)"
+        # Движение цены — считаем по токену позиции (NO инвертирован)
+        entry_tok = entry_price if direction == "YES" else (1.0 - entry_price)
+        exit_tok  = exit_price  if direction == "YES" else (1.0 - exit_price)
+        move = exit_tok - entry_tok
+        move_str = f"{'+' if move >= 0 else ''}{move:.3f}  ({'+' if move >= 0 else ''}{move/max(entry_tok,0.001)*100:.1f}%)"
 
         # Время удержания
         held_str = ""
@@ -230,7 +232,7 @@ class Telegram:
             f"*{question[:90]}*",
             f"",
         ]
-        row = f"{direction}  `{entry_price:.3f}` → `{exit_price:.3f}`  Δ{move_str}"
+        row = f"{direction}  `{entry_tok:.3f}` → `{exit_tok:.3f}`  Δ{move_str}"
         lines.append(row)
 
         meta = f"Размер: ${size:.2f}  ·  {strategy}"

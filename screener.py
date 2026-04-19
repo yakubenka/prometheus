@@ -167,7 +167,9 @@ def _kalshi_gap(question: str) -> float:
             if sum(1 for w in words if w in title) >= 2:
                 p = m.get("yes_ask") or m.get("last_price")
                 if p:
-                    return float(p) / 100
+                    p_val = float(p)
+                    # Kalshi может вернуть basis points (8500) или decimal (0.85)
+                    return p_val / 100 if p_val > 1.0 else p_val
     except Exception:
         pass
     return 0.0

@@ -200,9 +200,9 @@ def store_get(key: str):
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 def _bot_auth(x_bot_key: str = Header(default="")):
-    if not API_KEY:
-        raise HTTPException(503, "DASHBOARD_API_KEY is not configured")
-    if not secrets.compare_digest(x_bot_key, API_KEY):
+    if not API_KEY or len(API_KEY) < 8:
+        raise HTTPException(503, "DASHBOARD_API_KEY is not configured or too short")
+    if not x_bot_key or not secrets.compare_digest(x_bot_key, API_KEY):
         raise HTTPException(401, "Invalid bot key")
 
 def _manual_close_auth(x_manual_close_key: str = Header(default="")):

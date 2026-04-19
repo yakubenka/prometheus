@@ -834,6 +834,7 @@ class Prometheus:
                 continue
 
             # Low confidence: cross-market с высоким edge или market_data с уменьшенным размером
+            _ai_size_mult = 1.0  # default; may be overridden below
             if result.confidence == "low":
                 if result.strategy_type == "cross_market_gap" and result.edge >= max(0.12, domain_min_edge):
                     log.info(f"  Cross-market override: edge={result.edge:.1%} conf=low")
@@ -843,7 +844,6 @@ class Prometheus:
                 else:
                     continue
 
-            _ai_size_mult = 1.0
             if result.strategy_type == "ai_assisted":
                 if result.edge < max(cfg.ai_unconfirmed_edge, domain_min_edge + 0.02):
                     log.info(f"  AI-assisted edge too small ({result.edge:.1%}) — skip")
@@ -1200,7 +1200,7 @@ class Prometheus:
                     "current_price": current_price,
                     "size":          p.size_usd,
                     "pnl":           upnl,
-                    "pnl_pct":       round(poly_pos.pnl_pct / 100, 4) if poly_pos else 0.0,
+                    "pnl_pct":       round(poly_pos.pnl_pct, 4) if poly_pos else 0.0,
                     "poly_verified": poly_pos is not None,
                     "age":           "now",
                     "tags":          p.tags,

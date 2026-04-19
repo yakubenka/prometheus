@@ -61,11 +61,16 @@ def check_liquidity(token_id: str,
         best_ask = min(a[0] for a in asks)
         spread   = best_ask - best_bid
 
-        # Считаем глубину в пределах 10% от лучшей цены
+        # Инвертированный стакан (best_ask < best_bid) — рынок нездоров
+        if spread < 0:
+            return LiquiditySnapshot(token_id, best_bid, best_ask, spread,
+                                     0, 0, False, f"inverted book: bid={best_bid:.3f} ask={best_ask:.3f}")
+
+        # Глубина в USD (notional = price × shares) в пределах 10% от лучшей цены
         bid_threshold = best_bid * 0.90
         ask_threshold = best_ask * 1.10
-        bid_depth = sum(p*s for p, s in bids if p >= bid_threshold)
-        ask_depth = sum(p*s for p, s in asks if p <= ask_threshold)
+        bid_depth = sum(p * s for p, s in bids if p >= bid_threshold)
+        ask_depth = sum(p * s for p, s in asks if p <= ask_threshold)
 
         # Фильтр
         if spread > max_spread:

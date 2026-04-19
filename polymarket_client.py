@@ -203,7 +203,7 @@ class PolymarketClient:
                         initial_value  = float(item.get("initialValue", 0)),
                         current_value  = float(item.get("currentValue", 0)),
                         unrealised_pnl = float(item.get("cashPnl", 0)),
-                        pnl_pct        = float(item.get("percentPnl", 0)),
+                        pnl_pct        = float(item.get("percentPnl", 0)) / 100.0,
                     )
                     if pos.token_id and pos.size > 0.01:
                         positions.append(pos)
