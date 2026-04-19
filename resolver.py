@@ -33,9 +33,9 @@ class PendingRedeem:
     pnl:          float
     slug:         str
     attempts:     int   = 0
-    max_attempts: int   = 5          # всего 5 попыток (~25 минут)
-    interval_sec: int   = 300        # повтор каждые 5 минут
-    next_retry_at: float = field(default_factory=lambda: time.time() + 300)
+    max_attempts: int   = 6          # всего 6 попыток (~60 минут)
+    interval_sec: int   = 600        # повтор каждые 10 минут
+    next_retry_at: float = field(default_factory=lambda: time.time() + 600)
 
 
 def sell_position_on_polymarket(token_id: str, shares: float,
@@ -642,7 +642,7 @@ class PositionResolver:
                                 question     = pos.question or "",
                                 pnl          = closed.pnl,
                                 slug         = getattr(pos, "slug", "") or "",
-                                next_retry_at = time.time() + 300,  # первый повтор через 5 мин
+                                next_retry_at = time.time() + 600,  # первый повтор через 10 мин
                             ))
                 continue
 
