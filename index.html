@@ -47,8 +47,10 @@ a{color:inherit;text-decoration:none}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.5)}
 .card-title{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;font-weight:500}
 
-/* hero row */
-.hero-row{display:grid;grid-template-columns:1fr 180px;gap:10px;align-items:stretch}
+/* hero card */
+.hero-inner{display:flex;gap:0;align-items:flex-start}
+.hero-left{flex:1;min-width:0}
+.hero-right{flex-shrink:0;width:115px;border-left:1px solid var(--line);padding-left:14px;display:flex;flex-direction:column;gap:6px}
 .balance-val{font-size:clamp(28px,7vw,44px);font-weight:700;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
 .balance-sub{font-size:13px;color:var(--muted);margin-top:6px}
 .balance-rows{margin-top:12px;display:flex;flex-direction:column;gap:3px}
@@ -56,8 +58,7 @@ a{color:inherit;text-decoration:none}
 .brow .bl{color:var(--muted)}
 .brow .bv{font-weight:600;font-variant-numeric:tabular-nums}
 
-/* sparkline card */
-.spark-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;justify-content:space-between;box-shadow:0 1px 3px rgba(0,0,0,.5)}
+
 .spark-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500}
 .spark-val{font-size:20px;font-weight:700;letter-spacing:-.04em;margin-top:4px;font-variant-numeric:tabular-nums}
 .spark-wrap{flex:1;display:flex;align-items:flex-end;padding-top:8px;min-height:55px}
@@ -155,16 +156,13 @@ a{color:inherit;text-decoration:none}
 .pulse{animation:pulse 2s ease-in-out infinite}
 
 @media(max-width:700px){
-  .hero-row{grid-template-columns:1fr 130px}
   .metrics{grid-template-columns:1fr 1fr}
   .spark-wrap{min-height:40px}
   .spark-wrap svg{height:40px}
 }
-@media(max-width:480px){
-  .hero-row{grid-template-columns:1fr}
-  .spark-card{padding:12px 14px}
-  .spark-wrap{min-height:36px}
-  .spark-wrap svg{height:36px}
+@media(max-width:420px){
+  .balance-val{font-size:32px}
+  .hero-right{width:95px}
 }
 @media(max-width:420px){
   .balance-val{font-size:32px}
@@ -192,24 +190,24 @@ a{color:inherit;text-decoration:none}
 <!-- OVERVIEW -->
 <section id="overview" class="tab-pane active">
 
-  <!-- Balance + Sparkline -->
-  <div class="hero-row">
-    <div class="card">
-      <div class="card-title">Balance</div>
-      <div class="balance-val" id="balVal">—</div>
-      <div class="balance-sub" id="balSub">—</div>
-      <div class="balance-rows" id="balRows"></div>
-    </div>
-    <div class="spark-card">
-      <div>
+  <!-- Balance + Sparkline (merged card) -->
+  <div class="card">
+    <div class="hero-inner">
+      <div class="hero-left">
+        <div class="card-title">Balance</div>
+        <div class="balance-val" id="balVal">—</div>
+        <div class="balance-sub" id="balSub">—</div>
+        <div class="balance-rows" id="balRows"></div>
+      </div>
+      <div class="hero-right">
         <div class="spark-label">Cumulative PnL</div>
         <div class="spark-val" id="sparkVal">—</div>
-      </div>
-      <div class="spark-wrap">
-        <svg id="sparkSvg" viewBox="0 0 160 60" preserveAspectRatio="none">
-          <path id="sparkPath" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <line id="sparkZero" x1="0" x2="160" stroke="rgba(255,255,255,.1)" stroke-width="1" stroke-dasharray="3,3"/>
-        </svg>
+        <div class="spark-wrap">
+          <svg id="sparkSvg" viewBox="0 0 160 55" preserveAspectRatio="none">
+            <path id="sparkPath" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <line id="sparkZero" x1="0" x2="160" stroke="rgba(255,255,255,.1)" stroke-width="1" stroke-dasharray="3,3"/>
+          </svg>
+        </div>
       </div>
     </div>
   </div>
