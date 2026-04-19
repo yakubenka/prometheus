@@ -829,10 +829,13 @@ class Prometheus:
                 log.info(f"  Edge {result.edge:.1%} < domain_min {domain_min_edge:.1%} — skip")
                 continue
 
-            # Консервативно: low confidence почти всегда пропускаем
+            # Low confidence: cross-market с высоким edge или market_data с уменьшенным размером
             if result.confidence == "low":
                 if result.strategy_type == "cross_market_gap" and result.edge >= max(0.12, domain_min_edge):
                     log.info(f"  Cross-market override: edge={result.edge:.1%} conf=low")
+                elif result.edge >= domain_min_edge and result.trade_quality >= max(cfg.min_trade_quality - 10, 45):
+                    _ai_size_mult = 0.40
+                    log.info(f"  Low-conf exploratory: edge={result.edge:.1%} quality={result.trade_quality}, size×0.40")
                 else:
                     continue
 

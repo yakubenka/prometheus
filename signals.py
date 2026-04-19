@@ -613,7 +613,7 @@ class SignalEngine:
         return sum(
             1 for s in signals
             if s.name in {"consensus", "predictit", "book_depth"}
-            and s.direction == direction and s.confidence >= 0.35
+            and s.direction == direction and s.confidence >= 0.25
         )
 
     def _strategy_type(self, direction: str, signals: list[Signal], ai_used: bool) -> str:
@@ -668,7 +668,7 @@ class SignalEngine:
         vote_margin = abs(yes_w - no_w) / max(total_w, 0.01)
         if edge >= 0.12 and external_support >= 1 and vote_margin > 0.20:
             conf = "high"
-        elif edge >= 0.05 and (external_support >= 1 or avg_conf >= 0.45):
+        elif edge >= 0.04 and (external_support >= 1 or avg_conf >= 0.35 or vote_margin >= 0.15):
             conf = "medium"
         else:
             conf = "low"

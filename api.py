@@ -512,7 +512,7 @@ def polymarket_live(request: Request):
                     "initial_value": round(float(item.get("initialValue", 0)), 2),
                     "current_value": round(float(item.get("currentValue", 0)), 2),
                     "pnl":           round(float(item.get("cashPnl", 0)), 2),
-                    "pnl_pct":       round(float(item.get("percentPnl", 0)), 4),
+                    "pnl_pct":       round(float(item.get("percentPnl", 0)) / 100, 4),
                 })
             except (ValueError, TypeError, KeyError):
                 continue

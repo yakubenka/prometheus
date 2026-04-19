@@ -131,8 +131,8 @@ class Telegram:
         category  = _CATEGORY_LABELS.get(question_type, "")
         cat_str   = f"  ·  {category}" if category else ""
 
-        token_price  = price if direction == "YES" else 1.0 - price
-        potential    = round(size * ((1.0 / max(token_price, 0.01)) - 1), 2)
+        # price is already the correct token price (NO token = ~0.73, not 1-0.73)
+        potential    = round(size * ((1.0 / max(price, 0.01)) - 1), 2)
         conf_icon    = {"high": "🔥", "medium": "✅", "low": "⚡"}.get(confidence, "")
 
         lines = [
