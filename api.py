@@ -164,6 +164,12 @@ def db_last_push():
     if not conn: return None
     try:
         cur = conn.cursor()
+        # Try dedicated last_push key first, fall back to overview updated_at
+        cur.execute("SELECT value FROM bot_state WHERE key='last_push'")
+        row = cur.fetchone()
+        if row:
+            cur.close()
+            return json.loads(row[0]).get("ts")
         cur.execute("SELECT updated_at FROM bot_state WHERE key='overview'")
         row = cur.fetchone()
         cur.close()
@@ -212,7 +218,12 @@ def _manual_close_auth(x_manual_close_key: str = Header(default="")):
         raise HTTPException(401, "Invalid manual close key")
 
 def _alive() -> bool:
-    t = db_last_push() if DATABASE_URL else _mem.get("last_push")
+    # Check DB first, fall back to memory (survives if DB write fails)
+    t = None
+    if DATABASE_URL:
+        t = db_last_push()
+    if t is None:
+        t = _mem.get("last_push")
     if not t: return False
     try:
         if isinstance(t, str):
@@ -244,7 +255,9 @@ def push(p: Push, _=Depends(_bot_auth)):
         store_set("smart_money", p.smart_money)
     if p.learning:
         store_set("learning", p.learning)
-    _mem["last_push"] = datetime.now(timezone.utc).isoformat()
+    now_str = datetime.now(timezone.utc).isoformat()
+    _mem["last_push"] = now_str
+    store_set("last_push", {"ts": now_str})
     return {"ok": True}
 
 # ── Read ───────────────────────────────────────────────────────────────────────
