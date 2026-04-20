@@ -1293,12 +1293,13 @@ class Prometheus:
                 },
             }
 
-            _r.post(
+            r = _r.post(
                 f"{api_url}/internal/push",
                 json=payload,
                 headers={"x-bot-key": cfg.dashboard_key},
                 timeout=8,
             )
+            r.raise_for_status()
             log.info(
                 f"📤 Данные отправлены в API | "
                 f"Bankroll ${self._real_bankroll:.2f} | "
