@@ -1283,12 +1283,13 @@ class Prometheus:
                 },
             }
 
-            _r.post(
+            r = _r.post(
                 f"{api_url}/internal/push",
                 json=payload,
                 headers={"x-bot-key": cfg.dashboard_key},
                 timeout=8,
             )
+            r.raise_for_status()
             log.info(
                 f"📤 Данные отправлены в API | "
                 f"Bankroll ${self._real_bankroll:.2f} | "
@@ -1296,7 +1297,7 @@ class Prometheus:
                 f"Portfolio ${poly_snap.positions_value:.2f}"
             )
         except Exception as e:
-            log.debug(f"Push to API failed: {e}")
+            log.warning(f"⚠️ Push to API failed ({api_url}): {type(e).__name__}: {e}")
 
     def _maybe_daily_report(self) -> None:
         now   = datetime.now(timezone.utc)
