@@ -1304,7 +1304,7 @@ class Prometheus:
                 f"Portfolio ${poly_snap.positions_value:.2f}"
             )
         except Exception as e:
-            log.debug(f"Push to API failed: {e}")
+            log.warning(f"⚠️ Push to API failed ({api_url}): {type(e).__name__}: {e}")
 
     def _maybe_daily_report(self) -> None:
         now   = datetime.now(timezone.utc)
