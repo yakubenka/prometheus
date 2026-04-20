@@ -428,7 +428,7 @@ async def close_position(request: Request, _=Depends(_manual_close_auth)):
         ov["pnl_today"]      = round(float(ov.get("pnl_today", 0)) + pnl, 2)
         ov["pnl_total"]      = round(float(ov.get("pnl_total", 0)) + pnl, 2)
         ov["open_positions"] = max(0, int(ov.get("open_positions", 1)) - 1)
-        ov["open_exposure"]  = round(max(0.0, float(ov.get("open_exposure", size)) - size), 2)
+        ov["open_exposure"]  = round(max(0.0, float(ov.get("open_exposure", 0)) - size), 2)
         ov["total_trades"]   = int(ov.get("total_trades", 0)) + 1
         # Пересчёт win_rate из реальной истории — надёжнее чем обратная реконструкция
         all_history = pos_data.get("history", [])
@@ -440,7 +440,7 @@ async def close_position(request: Request, _=Depends(_manual_close_auth)):
     return {"ok": True, "pnl": pnl}
 
 @app.get("/api/overview/recalc")
-def overview_recalc():
+def overview_recalc(_=Depends(_bot_auth)):
     """
     Пересчитать pnl_today и pnl_total из истории позиций.
     Вызывать если P&L на дашборде рассинхронизировался.
@@ -640,7 +640,9 @@ def admin_reset(_=Depends(_bot_auth)):
     store_set("positions", empty_positions)
     store_set("signals",   {"_list": []})
 
-    _mem["last_push"] = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _mem["last_push"] = now_iso
+    store_set("last_push", {"ts": now_iso})
 
     return {
         "ok":      True,

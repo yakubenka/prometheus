@@ -426,6 +426,8 @@ class Prometheus:
 
     def _resolve_positions(self) -> None:
         closed = self.resolver.run()
+        if closed:
+            self._poly_client.invalidate()  # positions changed, refresh cache
         for c in closed:
             # Получаем сохранённые сигналы по market_id (если есть)
             saved_signals = self._market_signals.get(c["market_id"], [])
@@ -785,7 +787,7 @@ class Prometheus:
         candidates = screen(all_markets, top_n=top_n, fetch_kalshi=False)
         log.info(f"После скрининга: {len(candidates)} кандидатов для decision engine")
 
-        near_res = self._find_near_resolution(all_markets)
+        near_res = self._find_near_resolution(all_markets) if cfg.enable_near_resolution else []
         if near_res:
             log.info(f"Near-resolution markets: {len(near_res)}")
 
@@ -958,7 +960,7 @@ class Prometheus:
                         size = size * _time_mult
                         log.info(f"  Time decay ×{_time_mult:.2f} ({_days_left:.1f}d left): ${size:.2f}")
                 except Exception:
-                    pass
+                    _time_mult = 1.0  # safe default if end_date malformed
 
             size = min(cfg.max_pos_usd, max(1.0, size))
 
@@ -1142,7 +1144,7 @@ class Prometheus:
 
     def _push_to_api(self) -> None:
         """Отправить актуальные данные в API сервис."""
-        api_url = os.environ.get("API_PUSH_URL", "")
+        api_url = cfg.api_push_url
         if not api_url:
             return
         try:

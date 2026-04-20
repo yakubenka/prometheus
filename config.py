@@ -44,6 +44,10 @@ class Config:
     manual_close_key: str = _s("MANUAL_CLOSE_KEY")
     allowed_origins: str = _s("ALLOWED_ORIGINS", "*")
 
+    api_push_url:   str   = _s("API_PUSH_URL")
+    poly_sig_type:  str   = _s("POLYMARKET_SIGNATURE_TYPE", "0")
+    clear_on_start: bool  = _b("CLEAR_POSITIONS_ON_START", False)
+
     dry_run:        bool  = _b("DRY_RUN", True)
     twitter_on:     bool  = _b("TWITTER_ON", True)
     trends_on:      bool  = _b("GOOGLE_TRENDS_ON", True)
