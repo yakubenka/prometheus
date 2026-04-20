@@ -237,7 +237,8 @@ def calc_position_shares(pos_or_direction, entry_price: float | None = None, siz
         entry = float(entry_price or 0)
         size = float(size_usd or 0)
     token_entry = calc_position_token_entry_price(direction, entry)
-    return round(size / max(token_entry, 0.001), 6)
+    # Apply 3% safety margin: fees and slippage mean actual received tokens < theoretical
+    return round(size / max(token_entry, 0.001) * 0.97, 6)
 
 def redeem_winning_position(market_id: str, token_id: str,
                              shares: float, poly_key: str = None) -> bool:
