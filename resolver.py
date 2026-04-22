@@ -457,6 +457,7 @@ class PositionResolver:
         self.tg   = telegram
         self._signal_outcomes: list[dict] = []
         self._pending_redeems: list[PendingRedeem] = []
+        self._peak_prices: dict[str, float] = {}  # token_id → highest token price seen
 
     def retry_pending_redeems(self) -> None:
         """Повторные попытки клейма выигрышей. Вызывать каждый цикл."""
@@ -723,7 +724,87 @@ class PositionResolver:
                 except Exception as e:
                     log.debug(f"time_exit parse error: {e}")
 
-            # 3. Stop-loss — потеряли cfg.stop_loss_pct+ от входной цены нашего токена
+            # 3. Take-profit — токен достиг cfg.take_profit_price (близко к резолюции)
+            if cur_token_price is not None and cur_token_price > 0:
+                cur_tok   = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
+                entry_tok = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
+                if cur_tok >= cfg.take_profit_price:
+                    pnl = round((cur_tok - entry_tok) / max(entry_tok, 0.01) * pos.size_usd, 2)
+                    log.info(
+                        f"💰 TAKE-PROFIT: token={cur_tok:.3f} >= {cfg.take_profit_price} | "
+                        f"+{(cur_tok - entry_tok) / max(entry_tok, 0.01):.0%} | {pos.question[:50]}"
+                    )
+                    shares = calc_position_shares(pos)
+                    sold, actual_price = False, cur_token_price
+                    if pos.token_id and poly_key:
+                        sold, actual_price = sell_position_on_polymarket(
+                            token_id=pos.token_id, shares=shares,
+                            poly_key=poly_key, funder=funder,
+                        )
+                        if not sold:
+                            log.warning(f"⚠️ TAKE-PROFIT sell failed: {pos.question[:40]}")
+                            continue
+                        confirmed = verify_position_closed(
+                            token_id=pos.token_id,
+                            funder=os.environ.get("POLYMARKET_FUNDER", ""),
+                            retries=3, wait_sec=10,
+                        )
+                        if not confirmed:
+                            log.warning(f"⚠️ TAKE-PROFIT: sell sent but position still visible")
+                            continue
+                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=actual_price, pnl=pnl)
+                    if closed:
+                        closed_now.append(self._make_closed_dict(pos, "TAKE_PROFIT", True, pnl))
+                        self._notify(pos, "TAKE_PROFIT", True, pnl, actual_price)
+                        log.info(f"✅ TAKE-PROFIT | {pos.question[:50]} | P&L ${pnl:+.2f}")
+                    self._peak_prices.pop(pos.token_id or "", None)
+                    continue
+
+            # 4. Trailing stop — откат от пика на cfg.trailing_stop_pct+
+            #    Активируется только если позиция сначала выросла на trailing_stop_min_gain+
+            if cur_token_price is not None and cur_token_price > 0 and pos.token_id:
+                cur_tok   = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
+                entry_tok = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
+                peak = self._peak_prices.get(pos.token_id, entry_tok)
+                if cur_tok > peak:
+                    self._peak_prices[pos.token_id] = cur_tok
+                    peak = cur_tok
+                # Only trail if position was up at least min_gain at some point
+                if peak >= entry_tok * (1.0 + cfg.trailing_stop_min_gain) and peak > 0:
+                    drawdown = (peak - cur_tok) / peak
+                    if drawdown >= cfg.trailing_stop_pct:
+                        pnl = round((cur_tok - entry_tok) / max(entry_tok, 0.01) * pos.size_usd, 2)
+                        log.info(
+                            f"📉 TRAILING STOP: {drawdown:.0%} from peak {peak:.3f} "
+                            f"(now {cur_tok:.3f}) | {pos.question[:50]}"
+                        )
+                        shares = calc_position_shares(pos)
+                        sold, actual_price = False, cur_token_price
+                        if poly_key:
+                            sold, actual_price = sell_position_on_polymarket(
+                                token_id=pos.token_id, shares=shares,
+                                poly_key=poly_key, funder=funder,
+                            )
+                            if not sold:
+                                log.warning(f"⚠️ TRAILING STOP sell failed: {pos.question[:40]}")
+                                continue
+                            confirmed = verify_position_closed(
+                                token_id=pos.token_id,
+                                funder=os.environ.get("POLYMARKET_FUNDER", ""),
+                                retries=3, wait_sec=10,
+                            )
+                            if not confirmed:
+                                log.warning(f"⚠️ TRAILING STOP: sell sent but position still visible")
+                                continue
+                        closed = self.risk.close_with_pnl(pos.market_id, exit_price=actual_price, pnl=pnl)
+                        if closed:
+                            closed_now.append(self._make_closed_dict(pos, "TRAILING_STOP", pnl >= 0, pnl))
+                            self._notify(pos, "TRAILING_STOP", pnl >= 0, pnl, actual_price)
+                            log.info(f"📉 TRAILING STOP | {pos.question[:50]} | P&L ${pnl:+.2f}")
+                        self._peak_prices.pop(pos.token_id, None)
+                        continue
+
+            # 5. Stop-loss — потеряли cfg.stop_loss_pct+ от входной цены нашего токена
             if cur_token_price is not None and cur_token_price > 0:
                 entry_token   = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
                 current_token = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
@@ -762,6 +843,7 @@ class PositionResolver:
                         closed_now.append(self._make_closed_dict(pos, "STOP_LOSS", False, pnl))
                         self._notify(pos, "STOP_LOSS", False, pnl, actual_price, loss_pct)
                         log.info(f"🛑 STOP-LOSS | {pos.question[:50]} | -{loss_pct:.0%} | P&L ${pnl:+.2f}")
+                    self._peak_prices.pop(pos.token_id or "", None)
 
         self._signal_outcomes.extend(closed_now)
         return closed_now
