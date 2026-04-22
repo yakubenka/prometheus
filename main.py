@@ -845,7 +845,7 @@ class Prometheus:
                 if result.edge < max(cfg.ai_unconfirmed_edge, domain_min_edge + 0.02):
                     log.info(f"  AI-assisted edge too small ({result.edge:.1%}) — skip")
                     continue
-                _min_quality = max(cfg.min_trade_quality + 15, 75)
+                _min_quality = max(cfg.min_trade_quality + 15, 65)
                 if result.trade_quality < _min_quality:
                     log.info(f"  AI-assisted quality {result.trade_quality} < {_min_quality} — skip")
                     continue

@@ -158,10 +158,10 @@ class LearningEngine:
         n = len({r.market_id for r in self._records})   # уникальные рынки
 
         if n < 10:
-            return 0.50   # почти нет данных — берём только половину claimed edge
+            return 0.75   # мало данных — умеренное сжатие (было 0.50, убивало edges)
 
         if n < 30:
-            return 0.65   # ранняя стадия
+            return 0.80   # ранняя стадия
 
         if n < 60:
             return 0.80   # достаточно данных для умеренного доверия

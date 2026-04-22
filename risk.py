@@ -40,7 +40,7 @@ _STOPWORDS = frozenset({
     "than", "then", "would", "could", "should", "between",
 })
 
-_SEMANTIC_MIN_OVERLAP = 3   # минимум общих токенов для признания семантической корреляции
+_SEMANTIC_MIN_OVERLAP = 5   # минимум общих токенов для признания семантической корреляции
 
 
 def _question_tokens(question: str) -> frozenset:
