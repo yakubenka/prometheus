@@ -43,7 +43,7 @@ def sell_position_on_polymarket(token_id: str, shares: float,
     """
     Продать токены на Polymarket по рыночной цене (SELL FAK ордер).
     Используется для stop-loss, take-profit и закрытия позиций.
-    
+
     Returns:
         (success, actual_price)
     """
@@ -84,16 +84,29 @@ def sell_position_on_polymarket(token_id: str, shares: float,
         except Exception:
             pass
 
-        sell_order = MarketOrderArgs(
-            token_id   = token_id,
-            amount     = shares,
-            side       = SELL,
-            order_type = OrderType.FAK,
-        )
-        signed = client.create_market_order(sell_order)
-        result = client.post_order(signed, OrderType.FAK)
-        log.info(f"✅ SELL OK: token={token_id[:12]} shares≈{shares:.1f} @ {current_price:.3f} | {result}")
-        return True, current_price
+        # Retry with decreasing size to handle balance shortfall from fees/slippage
+        for factor in (0.97, 0.93, 0.88):
+            attempt = round(shares * factor, 6)
+            try:
+                sell_order = MarketOrderArgs(
+                    token_id   = token_id,
+                    amount     = attempt,
+                    side       = SELL,
+                    order_type = OrderType.FAK,
+                )
+                signed = client.create_market_order(sell_order)
+                result = client.post_order(signed, OrderType.FAK)
+                log.info(f"✅ SELL OK: token={token_id[:12]} shares≈{attempt:.2f} (×{factor}) @ {current_price:.3f} | {result}")
+                return True, current_price
+            except Exception as e:
+                err = str(e)
+                if "not enough balance" in err or "balance is not enough" in err:
+                    log.warning(f"SELL balance short at ×{factor}: {err[:120]}, retrying smaller…")
+                    continue
+                raise  # any other error → propagate
+
+        log.error(f"SELL failed token={token_id[:12]}: all size factors exhausted")
+        return False, 0.0
 
     except Exception as e:
         log.error(f"SELL failed token={token_id[:12]}: {e}")
