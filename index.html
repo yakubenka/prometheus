@@ -675,22 +675,30 @@ function renderOverview() {
   const fresh = live.configured && (Date.now()-live.ts)<45000;
   const history = S.positions.history||[];
 
-  // Balance
+  // Balance — prefer real CLOB USDC balance from Polymarket
+  const clobUsdc = Number(ov.clob_usdc||0);
   const portfolioVal = fresh ? (live.portfolio_value||0) : (ov.portfolio_value||0);
   const total = Number(ov.bankroll||0);
-  const cash = Math.max(0, total-portfolioVal);
-  $('balVal').textContent = total>0 ? moneyPlain(total) : '—';
+  // Show real CLOB USDC if available, else fall back to bankroll estimate
+  const displayBalance = clobUsdc > 0 ? clobUsdc : (total > 0 ? total : null);
+  $('balVal').textContent = displayBalance != null ? moneyPlain(displayBalance) : '—';
   const syncLabel = (fresh&&live.synced_at) ? `Synced ${live.synced_at}` : (ov.poly_sync_at?`Synced ${ov.poly_sync_at}`:'');
   const modeLabel = ov.dry_run ? 'Dry run' : 'Live trading';
-  $('balSub').textContent = [ov.bot_running?'Online':'Offline', modeLabel, syncLabel].filter(Boolean).join(' · ');
+  const balLabel = clobUsdc > 0 ? 'USDC wallet' : 'Estimated';
+  $('balSub').textContent = [ov.bot_running?'Online':'Offline', modeLabel, balLabel, syncLabel].filter(Boolean).join(' · ');
 
   let balRowsHtml = '';
-  if (fresh && portfolioVal>0) {
-    const upnl = live.unrealised_pnl||0;
-    balRowsHtml = `
-      <div class="brow"><span class="bl">Cash</span><span class="bv">${moneyPlain(cash)}</span></div>
-      <div class="brow"><span class="bl">Positions</span><span class="bv">${moneyPlain(portfolioVal)}</span></div>
-      <div class="brow"><span class="bl">Unrealised</span><span class="bv ${colorClass(upnl)}">${money(upnl)}</span></div>`;
+  if (portfolioVal > 0 || (clobUsdc > 0 && portfolioVal >= 0)) {
+    const upnl = fresh ? (live.unrealised_pnl||0) : Number(ov.unrealised_pnl||0);
+    if (clobUsdc > 0) {
+      balRowsHtml = `
+        <div class="brow"><span class="bl">Open positions</span><span class="bv">${moneyPlain(portfolioVal)}</span></div>
+        <div class="brow"><span class="bl">Unrealised</span><span class="bv ${colorClass(upnl)}">${money(upnl)}</span></div>`;
+    } else if (fresh) {
+      balRowsHtml = `
+        <div class="brow"><span class="bl">Positions</span><span class="bv">${moneyPlain(portfolioVal)}</span></div>
+        <div class="brow"><span class="bl">Unrealised</span><span class="bv ${colorClass(upnl)}">${money(upnl)}</span></div>`;
+    }
   }
   $('balRows').innerHTML = balRowsHtml;
   $('balRows').style.display = balRowsHtml ? '' : 'none';

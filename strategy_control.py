@@ -13,7 +13,7 @@ from typing import Optional
 
 log = logging.getLogger("prometheus.strategy_control")
 
-TRACKED_STRATEGIES = ("cross_market_gap", "market_data", "ai_assisted")
+TRACKED_STRATEGIES = ("cross_market_gap", "market_data", "ai_assisted", "smart_money", "near_resolution")
 
 
 def _utc_now() -> datetime:

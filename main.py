@@ -1261,6 +1261,7 @@ class Prometheus:
                     "open_positions":    snap["open_positions"],
                     "open_exposure":     snap["open_exposure"],
                     "bankroll":          round(_bankroll_ui, 2),
+                    "clob_usdc":         round(self._clob_usdc_balance, 2),
                     "portfolio_value":   round(poly_snap.positions_value, 2),
                     "total_invested":    round(poly_snap.total_invested, 2),
                     "poly_sync_at":      datetime.now(timezone.utc).strftime("%H:%M UTC"),
