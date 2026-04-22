@@ -1207,6 +1207,7 @@ class Prometheus:
                     "pnl_pct":       round(poly_pos.pnl_pct, 4) if poly_pos else 0.0,
                     "poly_verified": poly_pos is not None,
                     "opened_at":     getattr(p, "opened_at", None) or "",
+                    "closed_at":     getattr(p, "closed_at", None) or "",
                     "tags":          p.tags,
                     "status":        p.status,
                     "type":          p.signal_type,

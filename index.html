@@ -6,21 +6,22 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Prometheus</title>
 <style>
-/* ── Design tokens ─────────────────────────────────────────────── */
+/* ── Design tokens — Prometheus Fire ───────────────────────────── */
 :root {
-  --bg:      #000000;
-  --s1:      #0f0f11;   /* card */
-  --s2:      #161618;   /* card inner / pos-card */
-  --s3:      #1c1c1e;   /* inset rows */
+  --bg:      #0b0a0f;   /* deep night — sky before dawn             */
+  --s1:      #111018;   /* card — indigo dark (Claude-inspired)      */
+  --s2:      #171622;   /* pos-card — indigo-dark layer              */
+  --s3:      #1e1d2a;   /* inset rows                                */
   --line:    rgba(255,255,255,.08);
-  --line2:   rgba(255,255,255,.04);
-  --text:    #ffffff;
-  --muted:   #636366;   /* iOS System Gray  */
-  --soft:    #aeaeb2;   /* iOS System Gray3 */
-  --good:    #30d158;
-  --bad:     #ff453a;
-  --warn:    #ffd60a;
-  --blue:    #0a84ff;
+  --line2:   rgba(255,255,255,.05);
+  --text:    #f0eef8;   /* warm white                                */
+  --muted:   #6b6880;   /* lavender-gray muted                       */
+  --soft:    #b3b0c4;   /* soft lavender                             */
+  --good:    #34d399;   /* emerald — warmer green                    */
+  --bad:     #f87171;   /* soft red                                  */
+  --warn:    #fbbf24;   /* amber                                     */
+  --fire:    #ff6b35;   /* Prometheus fire — brand accent            */
+  --blue:    #818cf8;   /* Olympus indigo                            */
   --r:       18px;
   --r-sm:    12px;
 }
@@ -57,6 +58,10 @@ a { color: inherit; text-decoration: none }
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -.04em;
+  background: linear-gradient(90deg, #f0eef8 30%, var(--fire));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 .status-pill {
   display: flex; align-items: center; gap: 6px;
@@ -66,6 +71,11 @@ a { color: inherit; text-decoration: none }
   border: 1px solid var(--line);
   padding: 6px 14px;
   border-radius: 999px;
+  transition: border-color .3s;
+}
+.status-pill.online {
+  border-color: rgba(255,107,53,.35);
+  color: var(--text);
 }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0 }
 
@@ -88,9 +98,9 @@ a { color: inherit; text-decoration: none }
 }
 .tab:hover { color: var(--soft) }
 .tab.active {
-  background: rgba(255,255,255,.11);
-  color: #fff;
-  border-color: rgba(255,255,255,.09);
+  background: rgba(255,107,53,.14);
+  color: var(--text);
+  border-color: rgba(255,107,53,.28);
 }
 
 /* ── Panes ──────────────────────────────────────────────────────── */
@@ -103,6 +113,10 @@ a { color: inherit; text-decoration: none }
   border: 1px solid var(--line);
   border-radius: var(--r);
   padding: 18px;
+}
+/* Hero card gets subtle fire top-border */
+.card.hero {
+  border-top-color: rgba(255,107,53,.35);
 }
 .card-title {
   font-size: 11px; font-weight: 500;
@@ -235,7 +249,8 @@ a { color: inherit; text-decoration: none }
   margin-top: 10px; display: flex; gap: 8px;
   align-items: center; flex-wrap: wrap;
 }
-.pos-link  { font-size: 12px; color: var(--blue); margin-left: auto }
+.pos-link  { font-size: 12px; color: var(--fire); opacity: .8; margin-left: auto }
+.pos-link:hover { opacity: 1 }
 .btn-close {
   font-size: 12px; color: var(--bad);
   padding: 3px 8px; border-radius: 6px;
@@ -367,7 +382,7 @@ a { color: inherit; text-decoration: none }
 <section id="overview" class="tab-pane active">
 
   <!-- Balance + Sparkline -->
-  <div class="card">
+  <div class="card hero">
     <div class="hero-inner">
       <div class="hero-left">
         <div class="card-title">Portfolio</div>
@@ -836,8 +851,9 @@ function renderAll() {
   renderStrategies();
   renderSettings();
   const online = !!S.overview.bot_running;
-  $('liveDot').style.background = online ? 'var(--good)' : 'var(--bad)';
+  $('liveDot').style.background = online ? 'var(--fire)' : 'var(--bad)';
   $('liveText').textContent = online ? 'Online' : 'Offline';
+  document.querySelector('.status-pill').classList.toggle('online', online);
 }
 
 /* ── fetch ── */
