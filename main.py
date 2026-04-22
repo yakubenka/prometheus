@@ -666,6 +666,7 @@ class Prometheus:
 
         if not snap["can_trade"]:
             log.warning(f"Торговля заблокирована | P&L: ${snap['daily_pnl']:.2f}")
+            self._push_to_api()  # heartbeat must fire even when paused
             return
 
         ai_trades = sm_trades = 0
