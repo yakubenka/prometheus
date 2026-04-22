@@ -6,22 +6,22 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Prometheus</title>
 <style>
-/* ── Design tokens — Prometheus Ember ──────────────────────────── */
+/* ── Design tokens — Prometheus Light (Claude-tone) ────────────── */
 :root {
-  --bg:      #110e09;   /* dark warm coal                            */
-  --s1:      #1c1710;   /* card — dark amber                         */
-  --s2:      #231d14;   /* pos-card — warm dark                      */
-  --s3:      #2c2418;   /* inset rows — ember                        */
-  --line:    rgba(255,200,120,.08);  /* warm gold border             */
-  --line2:   rgba(255,200,120,.04);
-  --text:    #f5f0e8;   /* warm cream — Claude-style off-white       */
-  --muted:   #8a7a65;   /* warm brown-gray                           */
-  --soft:    #c4b49a;   /* warm sand                                 */
-  --good:    #34d399;   /* emerald                                   */
-  --bad:     #f87171;   /* soft red                                  */
-  --warn:    #fbbf24;   /* amber                                     */
+  --bg:      #f5f0e8;   /* warm cream — Claude background            */
+  --s1:      #fffdf9;   /* card — warm white                         */
+  --s2:      #f9f5ee;   /* pos-card — cream                          */
+  --s3:      #f0ebe0;   /* inset rows — warm sand                    */
+  --line:    rgba(0,0,0,.08);
+  --line2:   rgba(0,0,0,.05);
+  --text:    #1c1712;   /* warm near-black                           */
+  --muted:   #9e8f7a;   /* warm brown-gray                           */
+  --soft:    #6b5c48;   /* warm medium                               */
+  --good:    #16a34a;   /* rich green                                */
+  --bad:     #dc2626;   /* rich red                                  */
+  --warn:    #d97706;   /* amber                                     */
   --fire:    #ff6b35;   /* Prometheus fire                           */
-  --blue:    #f5a623;   /* warm gold (links, accents)                */
+  --blue:    #ea580c;   /* warm orange links                         */
   --r:       18px;
   --r-sm:    12px;
 }
@@ -50,10 +50,11 @@ a { color: inherit; text-decoration: none }
   align-items: center;
   padding: 8px 0 18px;
   position: sticky; top: 0; z-index: 9;
-  background: linear-gradient(var(--bg) 80%, transparent);
+  background: linear-gradient(var(--bg) 75%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
+html, body { color-scheme: light }
 .brand {
   font-size: 18px;
   font-weight: 700;
@@ -323,19 +324,19 @@ a { color: inherit; text-decoration: none }
 .input {
   width: 100%; padding: 13px 14px;
   border-radius: var(--r-sm); border: 1px solid var(--line);
-  background: #060608; color: #fff;
+  background: var(--s3); color: var(--text);
   outline: none; font: inherit; font-size: 14px;
 }
-.input:focus { border-color: rgba(255,255,255,.22) }
+.input:focus { border-color: rgba(0,0,0,.25) }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px }
 .btn {
   border: 1px solid var(--line);
   padding: 9px 18px; border-radius: 999px;
   font-size: 13px; font-weight: 600; transition: .15s;
 }
-.btn-primary  { background: #fff; color: #000; border-color: #fff }
+.btn-primary  { background: var(--text); color: var(--bg); border-color: var(--text) }
 .btn-ghost    { background: transparent; color: var(--soft) }
-.btn-ghost:hover { color: #fff }
+.btn-ghost:hover { color: var(--text) }
 .btn-danger   { background: rgba(255,69,58,.08); color: var(--bad); border-color: rgba(255,69,58,.22) }
 .btn:disabled { opacity: .35; cursor: not-allowed }
 .modal-result { font-size: 13px; color: var(--muted); margin-top: 10px }
