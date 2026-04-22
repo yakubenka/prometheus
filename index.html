@@ -741,14 +741,21 @@ function renderPositions() {
 function renderHistory() {
   const rows = (S.positions.history||[]).slice().reverse().slice(0,100);
   $('histRows').innerHTML = rows.length
-    ? rows.map(p=>`
-        <tr>
-          <td style="max-width:300px">${esc((p.question||'').slice(0,80))}</td>
-          <td><span style="color:${(p.direction||'YES')==='YES'?'var(--good)':'var(--bad)'};font-weight:600">${esc(p.direction||'—')}</span></td>
-          <td style="color:var(--muted)">${esc(fmtType(p.type||''))}</td>
-          <td>${moneyPlain(p.size||0)}</td>
-          <td class="right ${colorClass(p.pnl)}">${money(p.pnl||0)}</td>
-        </tr>`).join('')
+    ? rows.map(p => {
+        const isYes = (p.direction||'YES') === 'YES';
+        const dirChip = `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;background:${isYes?'rgba(48,209,88,.12)':'rgba(255,69,58,.12)'};color:${isYes?'var(--good)':'var(--bad)'}">${esc(p.direction||'—')}</span>`;
+        const dateStr = p.closed_at ? new Date(p.closed_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+        return `<tr>
+          <td style="max-width:260px">
+            <div style="font-size:13px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc((p.question||'').slice(0,100))}</div>
+            ${dateStr?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${dateStr}</div>`:''}
+          </td>
+          <td style="vertical-align:middle;padding-right:8px">${dirChip}</td>
+          <td style="color:var(--muted);font-size:12px">${esc(fmtType(p.type||''))}</td>
+          <td style="font-variant-numeric:tabular-nums">${moneyPlain(p.size||0)}</td>
+          <td class="right ${colorClass(p.pnl)}" style="font-weight:700;font-variant-numeric:tabular-nums">${money(p.pnl||0)}</td>
+        </tr>`;
+      }).join('')
     : '<tr><td colspan="5" class="empty">No history yet.</td></tr>';
 }
 
@@ -756,16 +763,26 @@ function renderHistory() {
 function renderStrategies() {
   const strats = Object.values(S.strategies.strategies||{});
   $('stratList').innerHTML = strats.length
-    ? strats.map(s=>{
-        const sc = s.state==='active'?'var(--good)':s.state==='disabled'?'var(--bad)':'var(--warn)';
+    ? strats.map(s => {
+        const stateColor = s.state==='active'?'var(--good)':s.state==='disabled'?'var(--bad)':'var(--warn)';
+        const wr = Number(s.win_rate||0);
+        const wrPct = Math.round(wr*100);
+        const wrColor = wr>=0.55?'var(--good)':wr>=0.45?'var(--warn)':'var(--bad)';
+        const wrBar = `<div style="margin-top:5px;height:3px;border-radius:2px;background:var(--s3);overflow:hidden">
+          <div style="height:100%;width:${wrPct}%;background:${wrColor};border-radius:2px;transition:width .4s"></div>
+        </div>`;
         return `<div class="strat-row">
-          <div>
+          <div style="flex:1;min-width:0">
             <div class="strat-name">${esc(fmtType(s.name||'strategy'))}</div>
-            <div class="strat-state" style="color:${sc}">${esc(s.state||'active')} · ×${Number(s.size_multiplier||1).toFixed(2)} size · ${s.trades||0} trades</div>
+            <div class="strat-state">
+              <span style="color:${stateColor}">${esc(s.state||'active')}</span>
+              <span style="color:var(--muted)"> · ×${Number(s.size_multiplier||1).toFixed(2)} · ${s.trades||0} trades</span>
+            </div>
+            ${wrBar}
           </div>
           <div class="strat-nums">
             <div class="strat-pnl ${colorClass(s.pnl)}">${money(s.pnl||0)}</div>
-            <div class="strat-sub">WR ${pct(s.win_rate||0)} · ROI ${pct(s.roi||0)}</div>
+            <div class="strat-sub">WR ${pct(wr)} · ROI ${pct(s.roi||0)}</div>
           </div>
         </div>`;
       }).join('')
