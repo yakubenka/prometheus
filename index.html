@@ -59,7 +59,7 @@ html, body { color-scheme: light }
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -.04em;
-  background: linear-gradient(90deg, #f0eef8 30%, var(--fire));
+  background: linear-gradient(90deg, #1c1712 40%, var(--fire));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -395,9 +395,10 @@ html, body { color-scheme: light }
         <div class="spark-label">Total PnL</div>
         <div class="spark-val" id="sparkVal">—</div>
         <div class="spark-wrap">
-          <svg id="sparkSvg" viewBox="0 0 160 55" preserveAspectRatio="none">
+          <svg id="sparkSvg" viewBox="0 0 160 62" preserveAspectRatio="none">
             <path id="sparkPath" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <line id="sparkZero" x1="0" x2="160" stroke="rgba(255,255,255,.08)" stroke-width="1" stroke-dasharray="3,4"/>
+            <line id="sparkZero" x1="0" x2="160" stroke="rgba(0,0,0,.10)" stroke-width="1" stroke-dasharray="3,4"/>
+            <g id="sparkLabels" style="font-size:7px;fill:var(--muted)"></g>
           </svg>
         </div>
       </div>
@@ -435,6 +436,12 @@ html, body { color-scheme: light }
   <div class="card" id="sigCard" style="display:none">
     <div class="card-title">Recent signals</div>
     <div id="sigList"></div>
+  </div>
+
+  <!-- Strategy mini-widget -->
+  <div class="card" id="stratMiniCard">
+    <div class="card-title">Strategies</div>
+    <div id="stratMiniList"><div class="empty">No data yet.</div></div>
   </div>
 
 </section>
@@ -532,6 +539,7 @@ function esc(s) {
   return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 function colorClass(v) { return Number(v)>0?'positive':Number(v)<0?'negative':''; }
+function colorStyle(v) { return Number(v)>0?'color:var(--good)':Number(v)<0?'color:var(--bad)':'color:var(--text)'; }
 function fmtType(v) { return String(v||'').replaceAll('_',' '); }
 
 /* ── merged positions (Polymarket authoritative when fresh) ── */
@@ -567,22 +575,38 @@ function merged() {
   return {open, liveFresh:true};
 }
 
-/* ── sparkline ── */
+/* ── sparkline (per-day) ── */
 function sparkline(history) {
+  // Group trades by day, build cumulative daily PnL
+  const byDay = {};
+  (history||[]).forEach(p => {
+    if (!p.pnl) return;
+    const ts = p.closed_at || p.opened_at || '';
+    const day = ts ? ts.slice(0,10) : 'unknown';
+    byDay[day] = (byDay[day]||0) + Number(p.pnl);
+  });
+  const days = Object.keys(byDay).filter(d=>d!=='unknown').sort();
+  if (!days.length) return {path:'', zeroY:30, color:'var(--muted)', labels:[]};
   let cum = 0;
-  const pts = (history||[]).map(p => { cum+=(p.pnl||0); return cum; });
-  if (pts.length < 2) return {path:'', zeroY:30, color:'var(--muted)'};
+  const pts = days.map(d => { cum += byDay[d]; return cum; });
   const min = Math.min(0,...pts), max = Math.max(0,...pts);
   const range = max-min||1;
-  const W=160, H=60;
+  const W=160, H=50, LABEL_H=8;
+  const n = pts.length;
   const path = pts.map((v,i) => {
-    const x = (i/(pts.length-1))*W;
+    const x = n>1 ? (i/(n-1))*W : W/2;
     const y = H-((v-min)/range)*H;
     return `${i===0?'M':'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
   }).join(' ');
   const zeroY = H-((0-min)/range)*H;
   const color = cum >= 0 ? 'var(--good)' : 'var(--bad)';
-  return {path, zeroY, color};
+  // Label positions: first, last, and one in middle if >2 days
+  const labels = [];
+  const fmtDay = d => { try { const dt=new Date(d+'T00:00:00'); return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'}); } catch(e){return d.slice(5);} };
+  if (n>=1) labels.push({x:0, text:fmtDay(days[0]), anchor:'start'});
+  if (n>=3) { const mi=Math.floor(n/2); labels.push({x:((mi/(n-1))*W).toFixed(1), text:fmtDay(days[mi]), anchor:'middle'}); }
+  if (n>=2) labels.push({x:W, text:fmtDay(days[n-1]), anchor:'end'});
+  return {path, zeroY, color, labels};
 }
 
 /* ── position card ── */
@@ -671,8 +695,8 @@ function renderOverview() {
   $('balRows').innerHTML = balRowsHtml;
   $('balRows').style.display = balRowsHtml ? '' : 'none';
 
-  // Sparkline
-  const {path, zeroY, color} = sparkline(history);
+  // Sparkline (daily)
+  const {path, zeroY, color, labels=[]} = sparkline(history);
   const totalPnl = Number(ov.pnl_total||0);
   $('sparkVal').textContent = money(totalPnl);
   $('sparkVal').className = `spark-val ${colorClass(totalPnl)}`;
@@ -680,6 +704,7 @@ function renderOverview() {
   $('sparkPath').setAttribute('stroke', path ? color : 'transparent');
   $('sparkZero').setAttribute('y1', zeroY.toFixed(1));
   $('sparkZero').setAttribute('y2', zeroY.toFixed(1));
+  $('sparkLabels').innerHTML = labels.map(l=>`<text x="${l.x}" y="60" text-anchor="${l.anchor}">${esc(l.text)}</text>`).join('');
 
   // Metrics
   const today = Number(ov.pnl_today||0);
@@ -844,9 +869,28 @@ function buildAlerts() {
   return alerts;
 }
 
+/* ── strategy mini widget on overview ── */
+function renderStratMini() {
+  const strats = Object.values(S.strategies.strategies||{});
+  const el = $('stratMiniList');
+  if (!el) return;
+  if (!strats.length) { el.innerHTML = '<div class="empty">No data yet.</div>'; return; }
+  el.innerHTML = strats.map(s => {
+    const wr = Number(s.win_rate||0);
+    const stateColor = s.state==='active'?'var(--good)':s.state==='disabled'?'var(--bad)':'var(--warn)';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <div style="flex:1;font-size:13px;font-weight:500">${esc(fmtType(s.name||'strategy'))}</div>
+      <div style="font-size:11px;color:${stateColor}">${esc(s.state||'active')}</div>
+      <div style="font-size:11px;color:var(--muted)">${s.trades||0}T · WR ${pct(wr)}</div>
+      <div style="font-size:13px;font-weight:600;${colorStyle(s.pnl)}">${money(s.pnl||0)}</div>
+    </div>`;
+  }).join('');
+}
+
 /* ── render all ── */
 function renderAll() {
   renderOverview();
+  renderStratMini();
   renderPositions();
   renderHistory();
   renderStrategies();

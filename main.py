@@ -518,11 +518,11 @@ class Prometheus:
                          for m in markets]
                     )
                     if arb:
-                        self.tg.arbitrage(arb[0].title, arb[0].content)
+                        log.info(f"Arbitrage: {arb[0].title}")
                 except Exception as e:
                     log.debug(f"Arbitrage error: {e}")
 
-                # Cross-market correlation check
+                # Cross-market correlation check (log only, no Telegram)
                 try:
                     corr_pairs = self.signals.find_correlated_markets(markets)
                     if corr_pairs:
@@ -532,13 +532,6 @@ class Prometheus:
                                 f"vs {m2.question[:40]} ({m2.yes_price:.0%}) "
                                 f"spread={spread:.0%}"
                             )
-                            msg = (
-                                "📊 *Correlation Gap*\n\n"
-                                f"`{m1.question[:60]}`  *{m1.yes_price:.0%}*\n"
-                                f"`{m2.question[:60]}`  *{m2.yes_price:.0%}*\n\n"
-                                f"Spread: *{spread:.0%}* — возможный арбитраж"
-                            )
-                            self.tg.send(msg, silent=True)
                 except Exception as e:
                     log.debug(f"Correlation: {e}")
 
@@ -1029,7 +1022,7 @@ class Prometheus:
             time.sleep(1.5)
 
         snap = self.risk.snapshot()
-        self.tg.cycle_summary(ai_trades, sm_trades, snap["daily_pnl"])
+        # cycle_summary disabled — too noisy per-cycle
         self._push_to_api()
 
         # После сделок — ускоряем следующие 3 цикла для мониторинга позиций
@@ -1246,12 +1239,14 @@ class Prometheus:
             # Learning stats
             learning_stats = self.learning.stats()
 
-            # Bankroll = стартовый капитал + реализованный P&L + unrealised P&L.
-            # Считаем здесь из уже готовых данных чтобы избежать timing-рассинхрона
-            # между _sync_balance() (вызывается раньше) и актуальным snap.
-            _realized   = snap["total_pnl"]        # сумма P&L закрытых позиций
-            _bankroll_ui = max(1.0, cfg.bankroll + _realized + total_upnl)
-            # Обновляем _real_bankroll чтобы Kelly sizing тоже видел актуальное значение
+            # Prefer real CLOB balance (USDC cash + positions) over formula estimate.
+            # _sync_balance() may have already set _real_bankroll to the CLOB value;
+            # only fall back to formula if we have no live CLOB data.
+            _realized   = snap["total_pnl"]
+            if self._clob_usdc_balance > 0:
+                _bankroll_ui = max(1.0, self._clob_usdc_balance + poly_snap.positions_value)
+            else:
+                _bankroll_ui = max(1.0, cfg.bankroll + _realized + total_upnl)
             self._real_bankroll = _bankroll_ui
 
             payload = {
