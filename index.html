@@ -221,41 +221,40 @@ html, body { color-scheme: light }
 .pos-card {
   background: var(--s2);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 14px 16px;
+  border-radius: 12px;
+  padding: 10px 12px;
   border-left-width: 3px;
 }
-.pos-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px }
+.pos-head { display: flex; justify-content: space-between; align-items: center; gap: 10px }
 .pos-q {
-  font-size: 14px; font-weight: 500; line-height: 1.4;
+  font-size: 13px; font-weight: 500; line-height: 1.35;
   flex: 1; min-width: 0;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
 }
 .pos-pnl    { flex-shrink: 0; text-align: right }
 .pos-pnl-val {
-  font-size: 19px; font-weight: 700;
+  font-size: 16px; font-weight: 700;
   letter-spacing: -.03em;
   font-variant-numeric: tabular-nums;
 }
-.pos-pnl-pct { font-size: 12px; color: var(--muted); margin-top: 2px }
+.pos-pnl-pct { font-size: 11px; color: var(--muted); margin-top: 1px }
 .pos-meta {
-  margin-top: 10px; padding-top: 10px;
-  border-top: 1px solid var(--line2);
-  display: flex; flex-wrap: wrap; gap: 3px 0;
-  font-size: 12px; color: var(--soft); align-items: center;
+  margin-top: 6px;
+  display: flex; flex-wrap: nowrap; gap: 0;
+  font-size: 11px; color: var(--soft); align-items: center;
+  overflow: hidden; white-space: nowrap;
 }
-.pm-sep { color: var(--line); margin: 0 6px }
+.pm-sep { color: var(--line); margin: 0 4px }
 .pm-l   { color: var(--muted); margin-right: 3px }
 .pos-foot {
-  margin-top: 10px; display: flex; gap: 8px;
-  align-items: center; flex-wrap: wrap;
+  display: contents;
 }
-.pos-link  { font-size: 12px; color: var(--fire); opacity: .8; margin-left: auto }
+.pos-link  { font-size: 11px; color: var(--fire); opacity: .8; margin-left: auto; white-space: nowrap; flex-shrink: 0 }
 .pos-link:hover { opacity: 1 }
 .btn-close {
-  font-size: 12px; color: var(--bad);
-  padding: 3px 8px; border-radius: 6px;
-  opacity: .65; transition: opacity .15s;
+  font-size: 11px; color: var(--bad);
+  padding: 2px 6px; border-radius: 5px;
+  opacity: .65; transition: opacity .15s; white-space: nowrap; flex-shrink: 0;
 }
 .btn-close:hover { opacity: 1 }
 
@@ -448,9 +447,9 @@ html, body { color-scheme: light }
 
 <!-- POSITIONS -->
 <section id="positions" class="tab-pane">
-  <div style="font-size:11px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:2px 0 8px">Open positions</div>
-  <div id="openList"><div class="empty" style="padding:12px 0">No open positions.</div></div>
-  <div id="closedHeader" style="display:none;font-size:11px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:10px 0 8px;margin-top:4px">Closed today</div>
+  <div style="font-size:10px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:2px 0 6px">Open positions</div>
+  <div id="openList"><div class="empty" style="padding:10px 0">No open positions.</div></div>
+  <div id="closedHeader" style="display:none;font-size:10px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:8px 0 6px;margin-top:2px">Closed today</div>
   <div id="closedList"></div>
 </section>
 
@@ -641,25 +640,22 @@ function fmtOpenedAt(ts) {
   } catch(e) { return ''; }
 }
 function posCard(p, closed=false) {
-  const dir      = p.direction||'YES';
-  const isYes    = dir === 'YES';
-  const pnlNum   = Number(p.pnl ?? null);
-  const hasPnl   = p.pnl != null;
-  const pnlPos   = hasPnl && pnlNum >= 0;
-  // Left accent: green if profit, red if loss, gray if unknown
-  const accent   = hasPnl ? (pnlPos ? 'var(--good)' : 'var(--bad)') : 'var(--line)';
+  const dir     = p.direction||'YES';
+  const isYes   = dir === 'YES';
+  const pnlNum  = Number(p.pnl ?? null);
+  const hasPnl  = p.pnl != null;
+  const accent  = hasPnl ? (pnlNum >= 0 ? 'var(--good)' : 'var(--bad)') : 'var(--line)';
   const pnlPctStr = p.pnl_pct ? `${(p.pnl_pct*100).toFixed(1)}%` : '';
   const typeLabel = fmtType(p.type||'');
-  const verLabel  = p.poly_verified
-    ? `<span class="tag good">Polymarket ✓</span>`
-    : `<span class="tag warn">Unconfirmed</span>`;
-  const closeId  = esc(p.id||p.market_id||p.token_id||'');
-  const closeQ   = (p.question||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const closeId = esc(p.id||p.market_id||p.token_id||'');
+  const closeQ  = (p.question||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
   const openedStr = fmtOpenedAt(p.opened_at);
-  // Direction chip
-  const dirChip  = `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;background:${isYes?'rgba(48,209,88,.12)':'rgba(255,69,58,.12)'};color:${isYes?'var(--good)':'var(--bad)'}">${esc(dir)}</span>`;
+  const dirChip = `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;background:${isYes?'rgba(48,209,88,.12)':'rgba(255,69,58,.12)'};color:${isYes?'var(--good)':'var(--bad)'};flex-shrink:0">${esc(dir)}</span>`;
+  // Single info row: dir · prices · size · age · type · [Close] · [↗]
+  const verDot = !closed && !p.poly_verified
+    ? `<span style="color:var(--warn);flex-shrink:0" title="Unverified">⚠</span>` : '';
   return `
-  <div class="pos-card" style="border-left-color:${accent};margin-bottom:8px">
+  <div class="pos-card" style="border-left-color:${accent};margin-bottom:6px">
     <div class="pos-head">
       <div class="pos-q">${esc(p.question||'Untitled')}</div>
       <div class="pos-pnl">
@@ -670,15 +666,13 @@ function posCard(p, closed=false) {
     <div class="pos-meta">
       ${dirChip}
       <span class="pm-sep">·</span>
-      <span>${pct(p.price||0)}<span style="color:var(--muted);margin:0 3px">→</span>${pct(p.current_price||0)}</span>
+      <span>${pct(p.price||0)}<span style="color:var(--muted);margin:0 2px">→</span>${pct(p.current_price||0)}</span>
       <span class="pm-sep">·</span>
-      <span style="color:var(--soft)">${moneyPlain(p.size||0)}</span>
-      ${openedStr?`<span class="pm-sep">·</span><span style="color:var(--muted)">${openedStr}</span>`:''}
-    </div>
-    <div class="pos-foot">
-      ${closed ? '' : verLabel}
-      ${typeLabel?`<span class="tag">${esc(typeLabel)}</span>`:''}
-      ${p.url?`<a class="pos-link" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket ↗</a>`:''}
+      <span>${moneyPlain(p.size||0)}</span>
+      ${openedStr?`<span class="pm-sep">·</span><span>${openedStr}</span>`:''}
+      ${typeLabel?`<span class="pm-sep">·</span><span style="color:var(--muted)">${esc(typeLabel)}</span>`:''}
+      ${verDot}
+      ${p.url?`<a class="pos-link" href="${esc(p.url)}" target="_blank" rel="noopener">↗</a>`:''}
       ${(!closed && closeId)?`<button class="btn-close" onclick="openClose('${closeId}','${closeQ}')">Close</button>`:''}
     </div>
   </div>`;
