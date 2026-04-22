@@ -588,42 +588,46 @@ function fmtOpenedAt(ts) {
     return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
   } catch(e) { return ''; }
 }
-function posCard(p) {
-  const dir = p.direction||'YES';
-  const dirColor = dir==='YES'?'var(--good)':'var(--bad)';
-  const hasPnl = p.pnl != null;
+function posCard(p, closed=false) {
+  const dir      = p.direction||'YES';
+  const isYes    = dir === 'YES';
+  const pnlNum   = Number(p.pnl ?? null);
+  const hasPnl   = p.pnl != null;
+  const pnlPos   = hasPnl && pnlNum >= 0;
+  // Left accent: green if profit, red if loss, gray if unknown
+  const accent   = hasPnl ? (pnlPos ? 'var(--good)' : 'var(--bad)') : 'var(--line)';
   const pnlPctStr = p.pnl_pct ? `${(p.pnl_pct*100).toFixed(1)}%` : '';
   const typeLabel = fmtType(p.type||'');
-  const verLabel = p.poly_verified
+  const verLabel  = p.poly_verified
     ? `<span class="tag good">Polymarket ✓</span>`
     : `<span class="tag warn">Unconfirmed</span>`;
-  const closeId = esc(p.id||p.market_id||p.token_id||'');
-  const closeQ = (p.question||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const closeId  = esc(p.id||p.market_id||p.token_id||'');
+  const closeQ   = (p.question||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
   const openedStr = fmtOpenedAt(p.opened_at);
+  // Direction chip
+  const dirChip  = `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;background:${isYes?'rgba(48,209,88,.12)':'rgba(255,69,58,.12)'};color:${isYes?'var(--good)':'var(--bad)'}">${esc(dir)}</span>`;
   return `
-  <div class="pos-card">
+  <div class="pos-card" style="border-left-color:${accent};margin-bottom:8px">
     <div class="pos-head">
       <div class="pos-q">${esc(p.question||'Untitled')}</div>
       <div class="pos-pnl">
-        <div class="pos-pnl-val ${colorClass(p.pnl)}">${hasPnl?money(p.pnl):moneyPlain(p.size||0)}</div>
+        <div class="pos-pnl-val ${colorClass(p.pnl)}">${hasPnl?money(pnlNum):moneyPlain(p.size||0)}</div>
         ${pnlPctStr?`<div class="pos-pnl-pct ${colorClass(p.pnl)}">${pnlPctStr}</div>`:''}
       </div>
     </div>
     <div class="pos-meta">
-      <span style="color:${dirColor};font-weight:700">${esc(dir)}</span>
+      ${dirChip}
       <span class="pm-sep">·</span>
-      <span><span class="pm-l">Entry</span>${pct(p.price||0)}</span>
+      <span>${pct(p.price||0)}<span style="color:var(--muted);margin:0 3px">→</span>${pct(p.current_price||0)}</span>
       <span class="pm-sep">·</span>
-      <span><span class="pm-l">Now</span>${pct(p.current_price||0)}</span>
-      <span class="pm-sep">·</span>
-      <span><span class="pm-l">In</span>${moneyPlain(p.size||0)}</span>
-      ${openedStr?`<span class="pm-sep">·</span><span class="pm-l">${openedStr}</span>`:''}
+      <span style="color:var(--soft)">${moneyPlain(p.size||0)}</span>
+      ${openedStr?`<span class="pm-sep">·</span><span style="color:var(--muted)">${openedStr}</span>`:''}
     </div>
     <div class="pos-foot">
-      ${verLabel}
+      ${closed ? '' : verLabel}
       ${typeLabel?`<span class="tag">${esc(typeLabel)}</span>`:''}
       ${p.url?`<a class="pos-link" href="${esc(p.url)}" target="_blank" rel="noopener">Polymarket ↗</a>`:''}
-      ${closeId?`<button class="btn-close" onclick="openClose('${closeId}','${closeQ}')">Close</button>`:''}
+      ${(!closed && closeId)?`<button class="btn-close" onclick="openClose('${closeId}','${closeQ}')">Close</button>`:''}
     </div>
   </div>`;
 }
@@ -729,23 +733,7 @@ function renderPositions() {
     ? sorted.map(posCard).join('')
     : '<div class="empty">No open positions.</div>';
   $('closedList').innerHTML = closed.length
-    ? closed.map(p=>{
-        const dc=(p.direction||'YES')==='YES'?'var(--good)':'var(--bad)';
-        return `<div class="pos-card">
-          <div class="pos-head">
-            <div class="pos-q">${esc(p.question||'Untitled')}</div>
-            <div class="pos-pnl">
-              <div class="pos-pnl-val ${colorClass(p.pnl)}">${money(p.pnl||0)}</div>
-              <div class="pos-pnl-pct">${moneyPlain(p.size||0)}</div>
-            </div>
-          </div>
-          <div class="pos-meta">
-            <span style="color:${dc};font-weight:700">${esc(p.direction||'—')}</span>
-            <span class="pm-sep">·</span>
-            <span>${esc(fmtType(p.type||''))}</span>
-          </div>
-        </div>`;
-      }).join('')
+    ? closed.map(p => posCard(p, true)).join('')
     : '<div class="empty">Nothing closed today.</div>';
 }
 
