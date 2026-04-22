@@ -366,22 +366,22 @@ a { color: inherit; text-decoration: none }
 <!-- OVERVIEW -->
 <section id="overview" class="tab-pane active">
 
-  <!-- Balance + Sparkline (merged card) -->
+  <!-- Balance + Sparkline -->
   <div class="card">
     <div class="hero-inner">
       <div class="hero-left">
-        <div class="card-title">Balance</div>
+        <div class="card-title">Portfolio</div>
         <div class="balance-val" id="balVal">—</div>
-        <div class="balance-sub" id="balSub">—</div>
+        <div class="balance-sub" id="balSub" style="margin-top:5px;font-size:12px"></div>
         <div class="balance-rows" id="balRows"></div>
       </div>
       <div class="hero-right">
-        <div class="spark-label">Cumulative PnL</div>
+        <div class="spark-label">Total PnL</div>
         <div class="spark-val" id="sparkVal">—</div>
         <div class="spark-wrap">
           <svg id="sparkSvg" viewBox="0 0 160 55" preserveAspectRatio="none">
             <path id="sparkPath" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <line id="sparkZero" x1="0" x2="160" stroke="rgba(255,255,255,.1)" stroke-width="1" stroke-dasharray="3,3"/>
+            <line id="sparkZero" x1="0" x2="160" stroke="rgba(255,255,255,.08)" stroke-width="1" stroke-dasharray="3,4"/>
           </svg>
         </div>
       </div>
@@ -425,14 +425,10 @@ a { color: inherit; text-decoration: none }
 
 <!-- POSITIONS -->
 <section id="positions" class="tab-pane">
-  <div class="card">
-    <div class="card-title">Open positions</div>
-    <div id="openList"><div class="empty">No open positions.</div></div>
-  </div>
-  <div class="card" id="closedCard">
-    <div class="card-title">Closed today</div>
-    <div id="closedList"><div class="empty">Nothing closed today.</div></div>
-  </div>
+  <div style="font-size:11px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:2px 0 8px">Open positions</div>
+  <div id="openList"><div class="empty" style="padding:12px 0">No open positions.</div></div>
+  <div id="closedHeader" style="display:none;font-size:11px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:10px 0 8px;margin-top:4px">Closed today</div>
+  <div id="closedList"></div>
 </section>
 
 <!-- HISTORY -->
@@ -731,10 +727,11 @@ function renderPositions() {
   const closed = S.positions.closed_today||[];
   $('openList').innerHTML = sorted.length
     ? sorted.map(posCard).join('')
-    : '<div class="empty">No open positions.</div>';
+    : '<div class="empty" style="padding:12px 0">No open positions.</div>';
+  $('closedHeader').style.display = closed.length ? '' : 'none';
   $('closedList').innerHTML = closed.length
     ? closed.map(p => posCard(p, true)).join('')
-    : '<div class="empty">Nothing closed today.</div>';
+    : '';
 }
 
 /* ── render history ── */
