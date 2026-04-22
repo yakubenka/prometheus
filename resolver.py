@@ -39,7 +39,8 @@ class PendingRedeem:
 
 
 def sell_position_on_polymarket(token_id: str, shares: float,
-                                poly_key: str = None) -> tuple[bool, float]:
+                                poly_key: str = None,
+                                funder: str = None) -> tuple[bool, float]:
     """
     Продать токены на Polymarket по рыночной цене (SELL FAK ордер).
     Используется для stop-loss, take-profit и закрытия позиций.
@@ -49,6 +50,7 @@ def sell_position_on_polymarket(token_id: str, shares: float,
     """
     import os as _os
     _key = poly_key or _os.environ.get("POLYMARKET_PRIVATE_KEY", "")
+    _funder = funder or _os.environ.get("POLYMARKET_FUNDER", "")
     if not _key or not token_id or shares <= 0:
         log.warning(f"sell: невозможно продать — key={bool(_key)} token={bool(token_id)} shares={shares}")
         return False, 0.0
@@ -60,9 +62,8 @@ def sell_position_on_polymarket(token_id: str, shares: float,
 
         sig_type = int(_os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
         clob_kwargs = dict(key=_key, chain_id=137, signature_type=sig_type)
-        funder = _os.environ.get("POLYMARKET_FUNDER", "")
-        if funder and funder.startswith("0x"):
-            clob_kwargs["funder"] = funder
+        if _funder and _funder.startswith("0x"):
+            clob_kwargs["funder"] = _funder
 
         client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
         raw_creds = client.create_or_derive_api_creds()
@@ -84,9 +85,25 @@ def sell_position_on_polymarket(token_id: str, shares: float,
         except Exception:
             pass
 
-        # Retry with decreasing size to handle balance shortfall from fees/slippage
-        for factor in (0.97, 0.93, 0.88):
-            attempt = round(shares * factor, 6)
+        # Query actual on-chain balance to avoid "not enough balance" errors from fee/slippage drift
+        sell_shares = shares
+        if _funder:
+            try:
+                real_pos = fetch_polymarket_positions(_funder)
+                real_size = (real_pos.get(token_id) or {}).get("size")
+                if real_size and float(real_size) > 0.01:
+                    actual = float(real_size) * 0.995  # 0.5% safety margin
+                    if actual < sell_shares:
+                        log.info(f"SELL: using actual balance {actual:.4f} (computed was {sell_shares:.4f})")
+                        sell_shares = actual
+            except Exception:
+                pass
+
+        # Try with real balance first, then shrink further if API data was stale
+        for factor in (1.0, 0.97, 0.93, 0.88, 0.80):
+            attempt = round(sell_shares * factor, 6)
+            if attempt <= 0:
+                break
             try:
                 sell_order = MarketOrderArgs(
                     token_id   = token_id,
@@ -96,12 +113,13 @@ def sell_position_on_polymarket(token_id: str, shares: float,
                 )
                 signed = client.create_market_order(sell_order)
                 result = client.post_order(signed, OrderType.FAK)
-                log.info(f"✅ SELL OK: token={token_id[:12]} shares≈{attempt:.2f} (×{factor}) @ {current_price:.3f} | {result}")
+                label = f"×{factor}" if factor < 1.0 else "actual"
+                log.info(f"✅ SELL OK: token={token_id[:12]} shares≈{attempt:.2f} ({label}) @ {current_price:.3f} | {result}")
                 return True, current_price
             except Exception as e:
                 err = str(e)
                 if "not enough balance" in err or "balance is not enough" in err:
-                    log.warning(f"SELL balance short at ×{factor}: {err[:120]}, retrying smaller…")
+                    log.warning(f"SELL balance short at ×{factor:.2f}: {err[:120]}, retrying smaller…")
                     continue
                 raise  # any other error → propagate
 
@@ -553,6 +571,7 @@ class PositionResolver:
                 token_id=action.token_id or pos.token_id or "",
                 shares=shares,
                 poly_key=poly_key,
+                funder=funder,
             )
             if sold:
                 confirmed = verify_position_closed(
@@ -680,7 +699,8 @@ class PositionResolver:
                         sold, actual_price = False, cur_token_price
                         if pos.token_id and poly_key:
                             sold, actual_price = sell_position_on_polymarket(
-                                token_id=pos.token_id, shares=shares, poly_key=poly_key,
+                                token_id=pos.token_id, shares=shares,
+                                poly_key=poly_key, funder=funder,
                             )
                             if not sold:
                                 log.warning(f"⚠️ TIME EXIT sell failed: {pos.question[:40]}")
@@ -720,6 +740,7 @@ class PositionResolver:
                             token_id = pos.token_id,
                             shares   = shares,
                             poly_key = poly_key,
+                            funder   = funder,
                         )
                         if not sold:
                             log.warning(f"⚠️ STOP-LOSS sell failed — позиция НЕ закрыта на Polymarket: {pos.question[:40]}")
