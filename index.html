@@ -398,6 +398,20 @@ function sparkline(history) {
 }
 
 /* ── position card ── */
+function fmtOpenedAt(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffH = diffMs / 3600000;
+    if (diffH < 1) return `${Math.round(diffH*60)}m ago`;
+    if (diffH < 24) return `${Math.floor(diffH)}h ago`;
+    const days = Math.floor(diffH/24);
+    if (days < 7) return `${days}d ago`;
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  } catch(e) { return ''; }
+}
 function posCard(p) {
   const dir = p.direction||'YES';
   const dirColor = dir==='YES'?'var(--good)':'var(--bad)';
@@ -409,6 +423,7 @@ function posCard(p) {
     : `<span class="tag warn">Unconfirmed</span>`;
   const closeId = esc(p.id||p.market_id||p.token_id||'');
   const closeQ = (p.question||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const openedStr = fmtOpenedAt(p.opened_at);
   return `
   <div class="pos-card">
     <div class="pos-head">
@@ -426,7 +441,7 @@ function posCard(p) {
       <span><span class="pm-l">Now</span>${pct(p.current_price||0)}</span>
       <span class="pm-sep">·</span>
       <span><span class="pm-l">In</span>${moneyPlain(p.size||0)}</span>
-      ${p.current_value!=null?`<span class="pm-sep">·</span><span><span class="pm-l">Val</span>${moneyPlain(p.current_value)}</span>`:''}
+      ${openedStr?`<span class="pm-sep">·</span><span class="pm-l">${openedStr}</span>`:''}
     </div>
     <div class="pos-foot">
       ${verLabel}
@@ -528,9 +543,14 @@ function renderOverview() {
 /* ── render positions tab ── */
 function renderPositions() {
   const {open} = merged();
+  const sorted = [...open].sort((a,b)=>{
+    const ta = a.opened_at ? new Date(a.opened_at).getTime() : 0;
+    const tb = b.opened_at ? new Date(b.opened_at).getTime() : 0;
+    return tb - ta;
+  });
   const closed = S.positions.closed_today||[];
-  $('openList').innerHTML = open.length
-    ? open.map(posCard).join('')
+  $('openList').innerHTML = sorted.length
+    ? sorted.map(posCard).join('')
     : '<div class="empty">No open positions.</div>';
   $('closedList').innerHTML = closed.length
     ? closed.map(p=>{
