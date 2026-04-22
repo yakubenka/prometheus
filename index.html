@@ -375,7 +375,7 @@ html, body { color-scheme: light }
   <button class="tab active" data-tab="overview">Overview</button>
   <button class="tab" data-tab="positions">Positions</button>
   <button class="tab" data-tab="history">History</button>
-  <button class="tab" data-tab="strategies">Strategies</button>
+  <button class="tab" data-tab="intelligence">Intelligence</button>
   <button class="tab" data-tab="settings">Settings</button>
 </div>
 
@@ -473,12 +473,27 @@ html, body { color-scheme: light }
   </div>
 </section>
 
-<!-- STRATEGIES -->
-<section id="strategies" class="tab-pane">
+<!-- INTELLIGENCE -->
+<section id="intelligence" class="tab-pane">
+
+  <!-- Smart money wallets -->
   <div class="card">
-    <div class="card-title">Strategy health</div>
-    <div id="stratList"><div class="empty">No data yet.</div></div>
+    <div class="card-title">Smart Money</div>
+    <div id="smList"><div class="empty">No data yet.</div></div>
   </div>
+
+  <!-- Signal accuracy -->
+  <div class="card" style="margin-top:10px">
+    <div class="card-title">Signal Accuracy</div>
+    <div id="sigAccList"><div class="empty">No data yet.</div></div>
+  </div>
+
+  <!-- Domain performance -->
+  <div class="card" style="margin-top:10px">
+    <div class="card-title">Domain Performance</div>
+    <div id="domList"><div class="empty">No data yet.</div></div>
+  </div>
+
 </section>
 
 <!-- SETTINGS -->
@@ -518,6 +533,7 @@ const S = {
   signals: {signals:[]},
   learning: {},
   strategies: {strategies:{}},
+  smart_money: {traders:[]},
   settings: {},
   polyLive: {configured:false, positions:[], portfolio_value:0, unrealised_pnl:0, total_invested:0, synced_at:null, ts:0},
   selectedId: null,
@@ -805,34 +821,69 @@ function renderHistory() {
     : '<tr><td colspan="5" class="empty">No history yet.</td></tr>';
 }
 
-/* ── render strategies ── */
-function renderStrategies() {
-  const strats = Object.values(S.strategies.strategies||{});
-  $('stratList').innerHTML = strats.length
-    ? strats.map(s => {
-        const stateColor = s.state==='active'?'var(--good)':s.state==='disabled'?'var(--bad)':'var(--warn)';
-        const wr = Number(s.win_rate||0);
-        const wrPct = Math.round(wr*100);
-        const wrColor = wr>=0.55?'var(--good)':wr>=0.45?'var(--warn)':'var(--bad)';
-        const wrBar = `<div style="margin-top:5px;height:3px;border-radius:2px;background:var(--s3);overflow:hidden">
-          <div style="height:100%;width:${wrPct}%;background:${wrColor};border-radius:2px;transition:width .4s"></div>
-        </div>`;
-        return `<div class="strat-row">
-          <div style="flex:1;min-width:0">
-            <div class="strat-name">${esc(fmtType(s.name||'strategy'))}</div>
-            <div class="strat-state">
-              <span style="color:${stateColor}">${esc(s.state||'active')}</span>
-              <span style="color:var(--muted)"> · ×${Number(s.size_multiplier||1).toFixed(2)} · ${s.trades||0} trades</span>
-            </div>
-            ${wrBar}
+/* ── render intelligence tab ── */
+function renderIntelligence() {
+  const learn = S.learning || {};
+  const sm    = (S.smart_money && S.smart_money.traders) ? S.smart_money.traders : [];
+
+  // Smart money
+  const smEl = $('smList');
+  if (smEl) {
+    smEl.innerHTML = sm.length ? sm.map(t => {
+      const cls = t.class||'';
+      const clsColor = cls==='Insider'?'var(--bad)':cls==='Sharp'?'var(--good)':'var(--muted)';
+      const domains = (t.domains||[]).slice(0,3).join(', ');
+      return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:500;font-family:monospace">${esc(t.addr||'')}</div>
+          ${domains?`<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(domains)}</div>`:''}
+        </div>
+        <div style="font-size:11px;color:${clsColor};font-weight:600;min-width:48px;text-align:right">${esc(cls)}</div>
+        <div style="font-size:11px;color:var(--muted);min-width:64px;text-align:right">WR ${pct(t.wr||0)}</div>
+        <div style="font-size:13px;font-weight:600;${colorStyle((t.roi||0))};min-width:52px;text-align:right">ROI ${pct(t.roi||0)}</div>
+      </div>`;
+    }).join('') : '<div class="empty">No smart money data yet.</div>';
+  }
+
+  // Signal accuracy
+  const sigStats = learn.signal_stats || {};
+  const sigEl = $('sigAccList');
+  if (sigEl) {
+    const entries = Object.entries(sigStats).sort((a,b)=>(b[1].accuracy||0)-(a[1].accuracy||0));
+    sigEl.innerHTML = entries.length ? entries.map(([name, s]) => {
+      const acc = Number(s.accuracy||0);
+      const accColor = acc>=0.6?'var(--good)':acc>=0.45?'var(--warn)':'var(--bad)';
+      const barW = Math.round(acc*100);
+      return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:500">${esc(name.replace(/_/g,' '))}</div>
+          <div style="margin-top:4px;height:3px;border-radius:2px;background:var(--s3);overflow:hidden">
+            <div style="height:100%;width:${barW}%;background:${accColor};border-radius:2px;transition:width .4s"></div>
           </div>
-          <div class="strat-nums">
-            <div class="strat-pnl ${colorClass(s.pnl)}">${money(s.pnl||0)}</div>
-            <div class="strat-sub">WR ${pct(wr)} · ROI ${pct(s.roi||0)}</div>
-          </div>
-        </div>`;
-      }).join('')
-    : '<div class="empty">No strategy stats yet.</div>';
+        </div>
+        <div style="font-size:11px;color:var(--muted);min-width:44px;text-align:right">${s.total||0} trades</div>
+        <div style="font-size:13px;font-weight:700;color:${accColor};min-width:44px;text-align:right">${pct(acc)}</div>
+      </div>`;
+    }).join('') : '<div class="empty">No signal data yet.</div>';
+  }
+
+  // Domain performance
+  const domStats = learn.domain_stats || {};
+  const domEl = $('domList');
+  if (domEl) {
+    const entries = Object.entries(domStats).sort((a,b)=>(b[1].pnl||0)-(a[1].pnl||0));
+    domEl.innerHTML = entries.length ? entries.map(([name, d]) => {
+      const wr = Number(d.win_rate||0);
+      const wrColor = wr>=0.55?'var(--good)':wr>=0.45?'var(--warn)':'var(--bad)';
+      const total = (d.wins||0)+(d.losses||0);
+      return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)">
+        <div style="flex:1;font-size:13px;font-weight:500;text-transform:capitalize">${esc(name.replace(/_/g,' '))}</div>
+        <div style="font-size:11px;color:var(--muted)">${total} trades · WR <span style="color:${wrColor}">${pct(wr)}</span></div>
+        <div style="font-size:11px;color:var(--muted)">×${Number(d.multiplier||1).toFixed(2)}</div>
+        <div style="font-size:13px;font-weight:700;${colorStyle(d.pnl||0)};min-width:52px;text-align:right">${money(d.pnl||0)}</div>
+      </div>`;
+    }).join('') : '<div class="empty">No domain data yet.</div>';
+  }
 }
 
 /* ── render settings ── */
@@ -901,7 +952,7 @@ function renderAll() {
   renderStratMini();
   renderPositions();
   renderHistory();
-  renderStrategies();
+  renderIntelligence();
   renderSettings();
   const online = !!S.overview.bot_running;
   $('liveDot').style.background = online ? 'var(--fire)' : 'var(--bad)';
@@ -923,14 +974,15 @@ async function fetchLive() {
 }
 async function refresh() {
   try {
-    const [ov,pos,sig,learn,strat,cfg] = await Promise.all([
+    const [ov,pos,sig,learn,strat,sm,cfg] = await Promise.all([
       json('/api/overview'), json('/api/positions'), json('/api/signals'),
-      json('/api/learning'), json('/api/strategies'), json('/api/settings'),
+      json('/api/learning'), json('/api/strategies'), json('/api/smart_money'), json('/api/settings'),
     ]);
     S.overview = ov||{};
     S.positions = pos||{};
     S.signals = sig||{};
     S.learning = learn||{};
+    S.smart_money = sm||{};
     S.strategies = strat||{};
     if (!Object.keys(S.strategies.strategies||{}).length && learn?.strategy_stats)
       S.strategies = {strategies: learn.strategy_stats};
