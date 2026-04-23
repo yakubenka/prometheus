@@ -298,7 +298,8 @@ def get_current_price(token_id: str) -> Optional[float]:
 
 
 def calc_position_token_entry_price(direction: str, entry_price: float) -> float:
-    return entry_price if direction == "YES" else (1.0 - entry_price)
+    # entry_price is already the correct token price for both YES and NO directions
+    return entry_price
 
 
 def calc_position_shares(pos_or_direction, entry_price: float | None = None, size_usd: float | None = None) -> float:
@@ -729,8 +730,8 @@ class PositionResolver:
                 try:
                     end_dt     = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
                     hours_left = (end_dt - datetime.now(timezone.utc)).total_seconds() / 3600
-                    entry_tok  = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-                    cur_tok    = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
+                    entry_tok  = pos.entry_price   # already our token price
+                    cur_tok    = cur_token_price   # already current price of our token
                     time_loss  = (entry_tok - cur_tok) / entry_tok if entry_tok > 0 else 0
 
                     if 0 < hours_left < cfg.time_exit_hours and time_loss >= cfg.time_exit_min_loss_pct:
@@ -970,8 +971,8 @@ class PositionResolver:
             if current is None:
                 result[pos.market_id] = 0.0
                 continue
-            entry = pos.entry_price if pos.direction == "YES" else 1 - pos.entry_price
-            cur   = current         if pos.direction == "YES" else 1 - current
+            entry = pos.entry_price  # already our token price
+            cur   = current          # already current price of our token
             pnl   = (cur - entry) * pos.size_usd / max(entry, 0.01)
             result[pos.market_id] = round(pnl, 2)
         return result
