@@ -244,11 +244,8 @@ class RiskManager:
     def close(self, market_id: str, exit_price: float, won: bool) -> Optional[Position]:
         for pos in self._positions:
             if pos.market_id == market_id and pos.status == "open":
-                if pos.direction == "YES":
-                    pnl = pos.size_usd * (((1.0 / max(pos.entry_price, 0.01)) - 1) if won else -1)
-                else:
-                    no_entry = 1.0 - pos.entry_price
-                    pnl = pos.size_usd * (((1.0 / max(no_entry, 0.01)) - 1) if won else -1)
+                # entry_price is already the correct token price for both YES and NO
+                pnl = pos.size_usd * (((1.0 / max(pos.entry_price, 0.01)) - 1) if won else -1)
                 pos.status = "closed"
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.exit_price = exit_price

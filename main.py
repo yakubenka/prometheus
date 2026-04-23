@@ -643,9 +643,7 @@ class Prometheus:
                         continue
                     cur = self._poly_client.token_price(pos.token_id)
                     if cur and cur > 0 and pos.entry_price > 0:
-                        entry_p = pos.entry_price if pos.direction == "YES" else 1 - pos.entry_price
-                        cur_p   = cur if pos.direction == "YES" else 1 - cur
-                        upnl_est += (cur_p - entry_p) / max(entry_p, 0.01) * pos.size_usd
+                        upnl_est += (cur - pos.entry_price) / max(pos.entry_price, 0.01) * pos.size_usd
 
             old_bankroll = self._real_bankroll
             self._real_bankroll = max(1.0, cfg.bankroll + realized_pnl + upnl_est)
@@ -1185,9 +1183,7 @@ class Prometheus:
                     return round(poly_pos.unrealised_pnl, 2)
                 if current_price <= 0 or p.entry_price <= 0:
                     return 0.0
-                entry = p.entry_price if p.direction == "YES" else 1 - p.entry_price
-                cur   = current_price if p.direction == "YES" else 1 - current_price
-                return round((cur - entry) / max(entry, 0.01) * p.size_usd, 2)
+                return round((current_price - p.entry_price) / max(p.entry_price, 0.01) * p.size_usd, 2)
 
             def polymarket_url(p) -> str:
                 """Ссылка на рынок: приоритет сохранённый URL → поиск по вопросу."""

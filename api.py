@@ -393,15 +393,8 @@ async def close_position(request: Request, _=Depends(_manual_close_auth)):
     size      = float(found.get("size", 0))
     direction = found.get("direction", "YES")
 
-    if direction == "YES":
-        entry_token   = entry
-        current_token = cur_price
-    else:
-        entry_token   = 1.0 - entry
-        current_token = 1.0 - cur_price
-
-    if entry_token > 0:
-        pnl = round((current_token - entry_token) / entry_token * size, 2)
+    if entry > 0:
+        pnl = round((cur_price - entry) / entry * size, 2)
     else:
         pnl = 0.0
 

@@ -95,19 +95,16 @@ def _calc_ev(prob: float, current_price: float, direction: str) -> float:
     EV = prob * payout - (1 - prob)
     где payout = (1/price) - 1
     """
-    price = current_price if direction == "YES" else 1.0 - current_price
-    price = max(price, 0.01)
+    price = max(current_price, 0.01)
     payout = (1.0 / price) - 1.0
     return round(prob * payout - (1.0 - prob), 4)
 
 
 def _calc_unrealised_pnl(pos, current_price: float) -> float:
     """Unrealised P&L по текущей цене."""
-    entry  = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-    cur    = current_price   if pos.direction == "YES" else 1.0 - current_price
-    if entry <= 0:
+    if pos.entry_price <= 0:
         return 0.0
-    return round((cur - entry) / entry * pos.size_usd, 2)
+    return round((current_price - pos.entry_price) / pos.entry_price * pos.size_usd, 2)
 
 
 def _profit_captured_pct(pos, current_price: float) -> float:
@@ -116,10 +113,9 @@ def _profit_captured_pct(pos, current_price: float) -> float:
     Максимальный потенциал = вход @ entry_price, выход @ 1.0
     Текущий потенциал = вход @ entry_price, выход @ current_price
     """
-    entry = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-    cur   = current_price   if pos.direction == "YES" else 1.0 - current_price
+    entry = pos.entry_price
     max_payout = (1.0 / max(entry, 0.01)) - 1.0
-    cur_payout = (cur - entry) / max(entry, 0.01)
+    cur_payout = (current_price - entry) / max(entry, 0.01)
     if max_payout <= 0:
         return 0.0
     return max(0.0, cur_payout / max_payout)
@@ -136,12 +132,11 @@ def _check_triggers(pos, current_price: float,
     if current_price is None or current_price <= 0:
         return None
 
-    entry = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-    cur   = current_price   if pos.direction == "YES" else 1.0 - current_price
+    entry = pos.entry_price
 
     # Триггер 1: большое движение цены
     if entry > 0:
-        price_change = (cur - entry) / entry
+        price_change = (current_price - entry) / entry
         if price_change >= 0.50:
             return f"price_up_{price_change:.0%}"
         if price_change <= -0.30:
@@ -199,8 +194,6 @@ def _ai_review(pos, current_price: float, trigger: str,
         return ReviewDecision("HOLD", "small drawdown, no AI review", 0.5, 0.0, 0.0, trigger, current_price, upnl_preview)
 
     # Собираем контекст
-    entry         = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-    cur           = current_price   if pos.direction == "YES" else 1.0 - current_price
     upnl          = _calc_unrealised_pnl(pos, current_price)
     captured_pct  = _profit_captured_pct(pos, current_price)
 
