@@ -616,7 +616,7 @@ class RiskManager:
                 log.error(f"Runtime state load failed: {e}")
         if not data:
             return
-        self._paused = bool(data.get("paused", False))
+        self._paused = False  # never persist pause across restarts — re-evaluate fresh
         self._pending_actions = []
         for item in data.get("pending_actions", []):
             try:

@@ -127,6 +127,11 @@ def sell_position_on_polymarket(token_id: str, shares: float,
         return False, 0.0
 
     except Exception as e:
+        err = str(e).lower()
+        # "no match" means the order book is closed — market likely resolved
+        if "no match" in err or "no orders" in err:
+            log.warning(f"SELL no match token={token_id[:12]}: market may have resolved — {e}")
+            return None, 0.0   # sentinel: None = market resolved, not a sell failure
         log.error(f"SELL failed token={token_id[:12]}: {e}")
         return False, 0.0
 
@@ -134,6 +139,44 @@ log = logging.getLogger("prometheus.resolver")
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB  = "https://clob.polymarket.com"
+
+
+def _handle_no_match(pos, risk_manager, closed_now, notify_fn) -> bool:
+    """
+    Called when sell_position_on_polymarket returns None (market resolved / no order book).
+    Checks Gamma API for resolution and closes the position internally if resolved.
+    Returns True if the position was closed.
+    """
+    log.warning(f"⚠️ SELL no match — checking resolution: {pos.question[:60]}")
+    try:
+        fresh_info = get_market_info(pos.market_id)
+        fresh_outcome = check_market_outcome(
+            pos.market_id,
+            current_price=_yes_price_from_info(fresh_info),
+            market_data=fresh_info,
+        )
+        if fresh_outcome is not None:
+            won = (pos.direction == fresh_outcome)
+            exit_p = 1.0 if won else 0.0
+            closed_r = risk_manager.close(pos.market_id, exit_price=exit_p, won=won)
+            if closed_r:
+                from dataclasses import asdict
+                closed_now.append({
+                    "market_id":  pos.market_id,
+                    "question":   pos.question,
+                    "direction":  pos.direction,
+                    "signal_type": getattr(pos, "signal_type", "market_data"),
+                    "size_usd":   pos.size_usd,
+                    "pnl":        closed_r.pnl,
+                    "won":        won,
+                    "reason":     fresh_outcome,
+                })
+                notify_fn(pos, fresh_outcome, won, closed_r.pnl, exit_p)
+                log.info(f"📋 Closed internally (resolved): {pos.question[:50]} outcome={fresh_outcome}")
+                return True
+    except Exception as e:
+        log.debug(f"_handle_no_match error: {e}")
+    return False
 
 
 def get_market_info(market_id: str) -> dict:
@@ -699,13 +742,17 @@ class PositionResolver:
                         shares = calc_position_shares(pos)
                         sold, actual_price = False, cur_token_price
                         if pos.token_id and poly_key:
-                            sold, actual_price = sell_position_on_polymarket(
+                            sell_r, actual_price = sell_position_on_polymarket(
                                 token_id=pos.token_id, shares=shares,
                                 poly_key=poly_key, funder=funder,
                             )
-                            if not sold:
+                            if sell_r is None:
+                                _handle_no_match(pos, self.risk, closed_now, self._notify)
+                                continue
+                            if not sell_r:
                                 log.warning(f"⚠️ TIME EXIT sell failed: {pos.question[:40]}")
                                 continue
+                            sold = True
                             confirmed = verify_position_closed(
                                 token_id=pos.token_id,
                                 funder=os.environ.get("POLYMARKET_FUNDER", ""),
@@ -737,13 +784,17 @@ class PositionResolver:
                     shares = calc_position_shares(pos)
                     sold, actual_price = False, cur_token_price
                     if pos.token_id and poly_key:
-                        sold, actual_price = sell_position_on_polymarket(
+                        sell_r, actual_price = sell_position_on_polymarket(
                             token_id=pos.token_id, shares=shares,
                             poly_key=poly_key, funder=funder,
                         )
-                        if not sold:
+                        if sell_r is None:
+                            _handle_no_match(pos, self.risk, closed_now, self._notify)
+                            continue
+                        if not sell_r:
                             log.warning(f"⚠️ TAKE-PROFIT sell failed: {pos.question[:40]}")
                             continue
+                        sold = True
                         confirmed = verify_position_closed(
                             token_id=pos.token_id,
                             funder=os.environ.get("POLYMARKET_FUNDER", ""),
@@ -781,13 +832,17 @@ class PositionResolver:
                         shares = calc_position_shares(pos)
                         sold, actual_price = False, cur_token_price
                         if poly_key:
-                            sold, actual_price = sell_position_on_polymarket(
+                            sell_r, actual_price = sell_position_on_polymarket(
                                 token_id=pos.token_id, shares=shares,
                                 poly_key=poly_key, funder=funder,
                             )
-                            if not sold:
+                            if sell_r is None:
+                                _handle_no_match(pos, self.risk, closed_now, self._notify)
+                                continue
+                            if not sell_r:
                                 log.warning(f"⚠️ TRAILING STOP sell failed: {pos.question[:40]}")
                                 continue
+                            sold = True
                             confirmed = verify_position_closed(
                                 token_id=pos.token_id,
                                 funder=os.environ.get("POLYMARKET_FUNDER", ""),
@@ -812,21 +867,42 @@ class PositionResolver:
 
                 if loss_pct >= cfg.stop_loss_pct:
                     pnl = round((current_token - entry_token) / max(entry_token, 0.01) * pos.size_usd, 2)
-                    
+
                     # Реально продаём токены на Polymarket
                     shares = calc_position_shares(pos)
                     sold, actual_price = False, cur_token_price
                     if pos.token_id and poly_key:
-                        sold, actual_price = sell_position_on_polymarket(
+                        sell_result, actual_price = sell_position_on_polymarket(
                             token_id = pos.token_id,
                             shares   = shares,
                             poly_key = poly_key,
                             funder   = funder,
                         )
+                        if sell_result is None:
+                            # "no match" — market probably resolved; check and close internally
+                            log.warning(f"⚠️ STOP-LOSS: no order match — проверяем резолюцию: {pos.question[:50]}")
+                            fresh_info = get_market_info(pos.market_id)
+                            fresh_outcome = check_market_outcome(
+                                pos.market_id,
+                                current_price=_yes_price_from_info(fresh_info),
+                                market_data=fresh_info,
+                            )
+                            if fresh_outcome is not None:
+                                won = (pos.direction == fresh_outcome)
+                                exit_p = 1.0 if won else 0.0
+                                closed_r = self.risk.close(pos.market_id, exit_price=exit_p, won=won)
+                                if closed_r:
+                                    closed_now.append(self._make_closed_dict(pos, fresh_outcome, won, closed_r.pnl))
+                                    self._notify(pos, fresh_outcome, won, closed_r.pnl, exit_p)
+                                    log.info(f"📋 Resolved internally: {pos.question[:50]} outcome={fresh_outcome}")
+                            else:
+                                log.warning(f"⚠️ STOP-LOSS sell failed — позиция НЕ закрыта: {pos.question[:40]}")
+                            continue
+                        sold = bool(sell_result)
                         if not sold:
                             log.warning(f"⚠️ STOP-LOSS sell failed — позиция НЕ закрыта на Polymarket: {pos.question[:40]}")
                             continue  # Не закрываем в базе если продажа не прошла
-                        
+
                         # Проверяем что позиция реально закрылась
                         confirmed = verify_position_closed(
                             token_id = pos.token_id,
