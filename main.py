@@ -407,6 +407,20 @@ class Prometheus:
             if action.attempts >= action.max_attempts:
                 self.risk.remove_pending_action(action.market_id, "open_verify")
                 self._pending_open_notifies.pop(action.market_id, None)
+                # Before pausing, check if market resolved — fast-resolving markets
+                # (sports games, breaking events) disappear from "open positions"
+                # the moment they resolve, which is NOT a failure
+                try:
+                    from resolver import get_market_info, check_market_outcome, _yes_price_from_info
+                    info = get_market_info(action.market_id)
+                    outcome = check_market_outcome(action.market_id,
+                                                   current_price=_yes_price_from_info(info),
+                                                   market_data=info)
+                    if outcome is not None:
+                        log.info(f"Open verify: market resolved as {outcome} before confirmation — not an error: {action.question[:60]}")
+                        return
+                except Exception:
+                    pass
                 self._alert_and_pause(
                     f"Не удалось подтвердить открытие сделки после {action.max_attempts} попыток: {action.question[:80]}"
                 )

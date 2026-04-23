@@ -205,9 +205,10 @@ class Telegram:
         pnl_str  = f"+${pnl:.2f}" if won else f"−${abs(pnl):.2f}"
         strategy = _STRATEGY_LABELS.get(signal_type, signal_type.replace("_", " ").title())
 
-        # Движение цены — считаем по токену позиции (NO инвертирован)
-        entry_tok = entry_price if direction == "YES" else (1.0 - entry_price)
-        exit_tok  = exit_price  if direction == "YES" else (1.0 - exit_price)
+        # entry_price and exit_price are already the correct token prices
+        # (no_price for NO, yes_price for YES) — no inversion needed
+        entry_tok = entry_price
+        exit_tok  = exit_price
         move = exit_tok - entry_tok
         move_str = f"{'+' if move >= 0 else ''}{move:.3f}  ({'+' if move >= 0 else ''}{move/max(entry_tok,0.001)*100:.1f}%)"
 

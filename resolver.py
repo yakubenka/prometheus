@@ -771,10 +771,12 @@ class PositionResolver:
                 except Exception as e:
                     log.debug(f"time_exit parse error: {e}")
 
-            # 3. Take-profit — токен достиг cfg.take_profit_price (близко к резолюции)
+            # 3. Take-profit — our token reached cfg.take_profit_price
             if cur_token_price is not None and cur_token_price > 0:
-                cur_tok   = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
-                entry_tok = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
+                # entry_price and cur_token_price are already the correct token prices
+                # (no_price for NO direction, yes_price for YES direction) — no inversion needed
+                cur_tok   = cur_token_price
+                entry_tok = pos.entry_price
                 if cur_tok >= cfg.take_profit_price:
                     pnl = round((cur_tok - entry_tok) / max(entry_tok, 0.01) * pos.size_usd, 2)
                     log.info(
@@ -814,8 +816,8 @@ class PositionResolver:
             # 4. Trailing stop — откат от пика на cfg.trailing_stop_pct+
             #    Активируется только если позиция сначала выросла на trailing_stop_min_gain+
             if cur_token_price is not None and cur_token_price > 0 and pos.token_id:
-                cur_tok   = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
-                entry_tok = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
+                cur_tok   = cur_token_price   # already our token price
+                entry_tok = pos.entry_price   # already our token entry price
                 peak = self._peak_prices.get(pos.token_id, entry_tok)
                 if cur_tok > peak:
                     self._peak_prices[pos.token_id] = cur_tok
@@ -859,10 +861,12 @@ class PositionResolver:
                         self._peak_prices.pop(pos.token_id, None)
                         continue
 
-            # 5. Stop-loss — потеряли cfg.stop_loss_pct+ от входной цены нашего токена
+            # 5. Stop-loss — our token dropped cfg.stop_loss_pct+ from entry
             if cur_token_price is not None and cur_token_price > 0:
-                entry_token   = pos.entry_price if pos.direction == "YES" else 1.0 - pos.entry_price
-                current_token = cur_token_price if pos.direction == "YES" else 1.0 - cur_token_price
+                # entry_price = our token price at open (no_price for NO, yes_price for YES)
+                # cur_token_price = current price of our specific token — no inversion needed
+                entry_token   = pos.entry_price
+                current_token = cur_token_price
                 loss_pct = (entry_token - current_token) / entry_token if entry_token > 0 else 0
 
                 if loss_pct >= cfg.stop_loss_pct:
