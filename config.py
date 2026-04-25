@@ -54,8 +54,8 @@ class Config:
 
     max_pos_usd:    float = _f("MAX_POSITION_USD", 10.0)
     max_daily_loss: float = _f("MAX_DAILY_LOSS_USD", 50.0)
-    max_open:       int   = _i("MAX_OPEN_POSITIONS", 10)
-    max_correlated: float = _f("MAX_CORRELATED_USD", 35.0)
+    max_open:       int   = _i("MAX_OPEN_POSITIONS", 25)
+    max_correlated: float = _f("MAX_CORRELATED_USD", 80.0)
     kelly_frac:     float = _f("KELLY_FRACTION", 0.20)
 
     min_edge:       float = _f("MIN_EDGE", 0.05)
@@ -64,7 +64,7 @@ class Config:
 
     scan_interval:  int   = _i("SCAN_INTERVAL_SEC", 300)
     intel_interval: int   = _i("INTEL_INTERVAL_SEC", 900)
-    max_markets:    int   = _i("MAX_MARKETS_PER_RUN", 30)
+    max_markets:    int   = _i("MAX_MARKETS_PER_RUN", 60)
     report_hour:    int   = _i("DAILY_REPORT_HOUR", 9)
     bankroll:       float = _f("BANKROLL", 100.0)
 
@@ -77,12 +77,12 @@ class Config:
     ai_request_budget_per_cycle: int = _i("AI_REQUEST_BUDGET_PER_CYCLE", 2)
     ai_min_quality_for_call: int = _i("AI_MIN_QUALITY_FOR_CALL", 45)
     ai_high_quality_skip: int = _i("AI_HIGH_QUALITY_SKIP", 72)
-    min_trade_quality: int = _i("MIN_TRADE_QUALITY", 50)
+    min_trade_quality: int = _i("MIN_TRADE_QUALITY", 45)
     enable_near_resolution: bool = _b("ENABLE_NEAR_RESOLUTION", False)
 
     strategy_min_trades: int = _i("STRATEGY_MIN_TRADES", 10)
-    strategy_weak_win_rate: float = _f("STRATEGY_WEAK_WIN_RATE", 0.45)
-    strategy_reenable_days: int = _i("STRATEGY_REENABLE_DAYS", 7)
+    strategy_weak_win_rate: float = _f("STRATEGY_WEAK_WIN_RATE", 0.40)
+    strategy_reenable_days: int = _i("STRATEGY_REENABLE_DAYS", 3)
     strategy_weakened_size_mult: float = _f("STRATEGY_WEAKENED_SIZE_MULT", 0.50)
     all_strategies_weak_min_usd: float = _f("ALL_STRATEGIES_WEAK_MIN_USD", 1.0)
 

@@ -847,9 +847,9 @@ class Prometheus:
             if result.confidence == "low":
                 if result.strategy_type == "cross_market_gap" and result.edge >= max(0.12, domain_min_edge):
                     log.info(f"  Cross-market override: edge={result.edge:.1%} conf=low")
-                elif result.edge >= domain_min_edge and result.trade_quality >= max(cfg.min_trade_quality - 10, 45):
-                    _ai_size_mult = 0.40
-                    log.info(f"  Low-conf exploratory: edge={result.edge:.1%} quality={result.trade_quality}, size×0.40")
+                elif result.edge >= domain_min_edge and result.trade_quality >= max(cfg.min_trade_quality - 10, 40):
+                    _ai_size_mult = 0.60
+                    log.info(f"  Low-conf exploratory: edge={result.edge:.1%} quality={result.trade_quality}, size×0.60")
                 else:
                     continue
 
