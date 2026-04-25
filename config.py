@@ -74,10 +74,10 @@ class Config:
     ai_unconfirmed_edge: float = _f("AI_UNCONFIRMED_EDGE", 0.10)
 
     ai_mode:        str   = _s("AI_MODE", "minimal").lower()  # off|minimal|full
-    ai_request_budget_per_cycle: int = _i("AI_REQUEST_BUDGET_PER_CYCLE", 2)
-    ai_min_quality_for_call: int = _i("AI_MIN_QUALITY_FOR_CALL", 45)
+    ai_request_budget_per_cycle: int = _i("AI_REQUEST_BUDGET_PER_CYCLE", 20)
+    ai_min_quality_for_call: int = _i("AI_MIN_QUALITY_FOR_CALL", 30)
     ai_high_quality_skip: int = _i("AI_HIGH_QUALITY_SKIP", 72)
-    min_trade_quality: int = _i("MIN_TRADE_QUALITY", 45)
+    min_trade_quality: int = _i("MIN_TRADE_QUALITY", 42)
     enable_near_resolution: bool = _b("ENABLE_NEAR_RESOLUTION", False)
 
     strategy_min_trades: int = _i("STRATEGY_MIN_TRADES", 10)

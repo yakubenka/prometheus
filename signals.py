@@ -612,7 +612,7 @@ class SignalEngine:
             return 0
         return sum(
             1 for s in signals
-            if s.name in {"consensus", "predictit", "book_depth"}
+            if s.name in {"consensus", "predictit", "book_depth", "sentiment", "calibration"}
             and s.direction == direction and s.confidence >= 0.25
         )
 
