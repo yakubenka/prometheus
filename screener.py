@@ -68,10 +68,6 @@ _BLOCKED_KEYWORDS = [
     "score in", "goals scored", "points scored", "yards ", "touchdowns",
     "hat trick", "grand slam", "wimbledon", "us open", "masters ",
     "world series", "stanley cup", "super league", "premier league",
-    # Combat sports
-    "ufc", "fight night", "bellator", "pfl ", "one championship",
-    "heavyweight", "lightweight", "middleweight", "featherweight", "welterweight",
-    " vs. ", " vs ", "bout ", "knockout", "submission win",
     # Esports
     "counter-strike", "valorant", "league of legends", "dota", "overwatch",
     "starcraft", "rocket league", "map winner", "game map",
@@ -347,11 +343,6 @@ def screen(markets: list[Market], top_n: int = 10,
 
     # ── Фаза 1: синхронные фильтры (нет HTTP) ─────────────────────────────────
     for market in markets:
-        if _is_sports_market(market):
-            blocked += 1
-            log.debug(f"  Skip sports — {market.question[:50]}")
-            continue
-
         if market.spread > _MAX_SPREAD:
             filtered += 1
             continue

@@ -713,14 +713,6 @@ class Prometheus:
         for sig in sm_signals[:3]:
             if not self.risk.snapshot()["can_trade"]:
                 break
-            from screener import _is_sports_market as _sports_check
-            class _SigMkt:
-                question = sig.question
-                tags     = list(sig.wallet.specializations)
-                category = ""
-            if _sports_check(_SigMkt()):
-                log.info(f"SM sports block: {sig.question[:60]}")
-                continue
             decision = self.risk.check(sig.market_id, sig.our_size,
                                         list(sig.wallet.specializations),
                                         question=sig.question)
