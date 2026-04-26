@@ -68,6 +68,10 @@ _BLOCKED_KEYWORDS = [
     "score in", "goals scored", "points scored", "yards ", "touchdowns",
     "hat trick", "grand slam", "wimbledon", "us open", "masters ",
     "world series", "stanley cup", "super league", "premier league",
+    # Combat sports
+    "ufc", "fight night", "bellator", "pfl ", "one championship",
+    "heavyweight", "lightweight", "middleweight", "featherweight", "welterweight",
+    " vs. ", " vs ", "bout ", "knockout", "submission win",
     # Esports
     "counter-strike", "valorant", "league of legends", "dota", "overwatch",
     "starcraft", "rocket league", "map winner", "game map",
