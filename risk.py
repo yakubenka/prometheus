@@ -135,7 +135,7 @@ class RiskManager:
 
         self._positions: list[Position] = []
         self._pending_actions: list[PendingAction] = []
-        self._recently_closed: dict[str, float] = {}  # market_id → closed_at timestamp
+        self._recently_closed: dict[str, dict] = {}  # market_id → {closed_at, cooldown_secs}
         self._audit_log: list[dict] = []
         self._db_init()
         self._load()
@@ -184,10 +184,17 @@ class RiskManager:
         if any(a.market_id == market_id and a.action_type == "open_verify" for a in self._pending_actions):
             return self._log_deny(market_id, REASON_DUPLICATE, size_usd)
 
-        # Block re-entry for 24h after a loss
+        # Block re-entry during cooldown after a loss
         if market_id in self._recently_closed:
-            elapsed = self._utc_ts() - self._recently_closed[market_id]
-            if elapsed < 86400:
+            rec = self._recently_closed[market_id]
+            # backwards-compat: old saves stored a plain float timestamp
+            if isinstance(rec, (int, float)):
+                rec = {"closed_at": float(rec), "cooldown_secs": 86400.0}
+                self._recently_closed[market_id] = rec
+            elapsed = self._utc_ts() - rec["closed_at"]
+            if elapsed < rec["cooldown_secs"]:
+                remaining_h = (rec["cooldown_secs"] - elapsed) / 3600
+                log.info(f"🕐 Cooldown {remaining_h:.1f}h left for {market_id[:16]}")
                 return self._log_deny(market_id, REASON_RECENT_LOSS, size_usd)
             del self._recently_closed[market_id]
 
@@ -259,8 +266,13 @@ class RiskManager:
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.exit_price = exit_price
                 pos.pnl = round(pnl, 2)
-                if pnl < 0:
-                    self._recently_closed[market_id] = self._utc_ts()
+                cooldown = self._loss_cooldown_secs(pos.entry_price, exit_price, pnl)
+                if cooldown > 0:
+                    self._recently_closed[market_id] = {
+                        "closed_at": self._utc_ts(),
+                        "cooldown_secs": cooldown,
+                    }
+                    log.info(f"⏳ Re-entry blocked {cooldown/3600:.0f}h | exit={exit_price:.3f} entry={pos.entry_price:.3f} | {pos.question[:50]}")
                 self._save()
                 log.info(f"{'✅' if won else '❌'} {'WIN' if won else 'LOSS'} | P&L ${pnl:+.2f} | {pos.question[:60]}")
                 return pos
@@ -273,8 +285,13 @@ class RiskManager:
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.exit_price = exit_price
                 pos.pnl = round(pnl, 2)
-                if pnl < 0:
-                    self._recently_closed[market_id] = self._utc_ts()
+                cooldown = self._loss_cooldown_secs(pos.entry_price, exit_price, pnl)
+                if cooldown > 0:
+                    self._recently_closed[market_id] = {
+                        "closed_at": self._utc_ts(),
+                        "cooldown_secs": cooldown,
+                    }
+                    log.info(f"⏳ Re-entry blocked {cooldown/3600:.0f}h | exit={exit_price:.3f} entry={pos.entry_price:.3f} | {pos.question[:50]}")
                 self._save()
                 return pos
         return None
@@ -476,6 +493,29 @@ class RiskManager:
             s["win_rate"] = round(s["wins"] / s["trades"], 3)
             s["roi"] = round(s["pnl"] / s["vol"], 3) if s["vol"] else 0
         return result
+
+    def _loss_cooldown_secs(self, entry_price: float, exit_price: float, pnl: float) -> float:
+        """
+        How long to block re-entry after a losing trade, based on where the
+        market price ended up and how far it fell from our entry.
+
+        exit_price < 0.05          → market near-dead (resolving NO)  → 7 days
+        price dropped ≥ 25%        → strong trend against us           → 24 h
+        price dropped 15–25%       → notable correction                → 6 h
+        price dropped < 15%        → noise / minor move                → no block
+        """
+        if pnl >= 0:
+            return 0.0
+        entry_price = max(entry_price, 0.01)
+        # Market essentially resolved to NO
+        if exit_price < 0.05:
+            return 7 * 86400.0
+        price_drop_pct = (entry_price - exit_price) / entry_price
+        if price_drop_pct >= 0.25:
+            return 24 * 3600.0
+        if price_drop_pct >= 0.15:
+            return 6 * 3600.0
+        return 0.0
 
     def _daily_pnl(self) -> float:
         today = date.today().isoformat()
