@@ -119,8 +119,7 @@ def _execute(market: Market, direction: str,
 
         order  = MarketOrderArgs(token_id=token, amount=size_usd,
                                  side=BUY, order_type=OrderType.FAK)
-        signed = client.create_market_order(order)
-        result = client.post_order(signed, OrderType.FAK)
+        result = client.create_and_post_market_order(order, order_type=OrderType.FAK)
         log.info(f"Ордер исполнен: {result}")
         return True
 

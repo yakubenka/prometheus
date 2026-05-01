@@ -104,8 +104,7 @@ def sell_position_on_polymarket(token_id: str, shares: float,
                     side       = SELL,
                     order_type = OrderType.FAK,
                 )
-                signed = client.create_market_order(sell_order)
-                result = client.post_order(signed, OrderType.FAK)
+                result = client.create_and_post_market_order(sell_order, order_type=OrderType.FAK)
                 label = f"×{factor}" if factor < 1.0 else "actual"
                 log.info(f"✅ SELL OK: token={token_id[:12]} shares≈{attempt:.2f} ({label}) @ {current_price:.3f} | {result}")
                 return True, current_price
@@ -397,8 +396,7 @@ def redeem_winning_position(market_id: str, token_id: str,
                 side       = SELL,
                 order_type = OrderType.FAK,
             )
-            signed = client.create_market_order(sell_order)
-            result = client.post_order(signed, OrderType.FAK)
+            result = client.create_and_post_market_order(sell_order, order_type=OrderType.FAK)
             log.info(f"Redeem via SELL OK: market={market_id[:12]} | {result}")
             return True
         except Exception as sell_err:
