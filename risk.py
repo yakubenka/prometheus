@@ -26,6 +26,7 @@ REASON_CORRELATED      = "correlated_exposure_limit"
 REASON_SEMANTIC_CORR   = "semantic_correlation_limit"
 REASON_SIZE_TOO_SMALL  = "size_below_minimum"
 REASON_SIZE_TOO_LARGE  = "size_above_maximum"
+REASON_RECENT_LOSS     = "recently_closed_with_loss"
 REASON_BOT_PAUSED      = "bot_paused"
 
 # ── Semantic correlation helpers ───────────────────────────────────────────────
@@ -134,6 +135,7 @@ class RiskManager:
 
         self._positions: list[Position] = []
         self._pending_actions: list[PendingAction] = []
+        self._recently_closed: dict[str, float] = {}  # market_id → closed_at timestamp
         self._audit_log: list[dict] = []
         self._db_init()
         self._load()
@@ -181,6 +183,13 @@ class RiskManager:
             return self._log_deny(market_id, REASON_DUPLICATE, size_usd)
         if any(a.market_id == market_id and a.action_type == "open_verify" for a in self._pending_actions):
             return self._log_deny(market_id, REASON_DUPLICATE, size_usd)
+
+        # Block re-entry for 24h after a loss
+        if market_id in self._recently_closed:
+            elapsed = self._utc_ts() - self._recently_closed[market_id]
+            if elapsed < 86400:
+                return self._log_deny(market_id, REASON_RECENT_LOSS, size_usd)
+            del self._recently_closed[market_id]
 
         # Проверка по тегам
         if tags:
@@ -250,6 +259,8 @@ class RiskManager:
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.exit_price = exit_price
                 pos.pnl = round(pnl, 2)
+                if pnl < 0:
+                    self._recently_closed[market_id] = self._utc_ts()
                 self._save()
                 log.info(f"{'✅' if won else '❌'} {'WIN' if won else 'LOSS'} | P&L ${pnl:+.2f} | {pos.question[:60]}")
                 return pos
@@ -262,6 +273,8 @@ class RiskManager:
                 pos.closed_at = datetime.now(timezone.utc).isoformat()
                 pos.exit_price = exit_price
                 pos.pnl = round(pnl, 2)
+                if pnl < 0:
+                    self._recently_closed[market_id] = self._utc_ts()
                 self._save()
                 return pos
         return None
@@ -540,6 +553,7 @@ class RiskManager:
         state = {
             "paused": self._paused,
             "pending_actions": [asdict(a) for a in self._pending_actions],
+            "recently_closed": self._recently_closed,
         }
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
@@ -614,6 +628,7 @@ class RiskManager:
         if not data:
             return
         self._paused = False  # never persist pause across restarts — re-evaluate fresh
+        self._recently_closed = data.get("recently_closed", {})
         self._pending_actions = []
         for item in data.get("pending_actions", []):
             try:
