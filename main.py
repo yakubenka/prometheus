@@ -86,18 +86,11 @@ def _execute(market: Market, direction: str,
         return False
 
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType
-        from py_clob_client.order_builder.constants import BUY
+        from py_clob_client_v2.client import ClobClient
+        from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType, BalanceAllowanceParams, AssetType
+        from py_clob_client_v2.order_builder.constants import BUY
 
-        # Proxy support for geo-restricted regions
-        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or ""
-        proxies   = {"http": proxy_url, "https": proxy_url} if proxy_url else None
-
-        # signature_type: 0=EOA, 1=EOA via proxy, 2=magic link
-        # Default 0 works for standard MetaMask EOA wallets
         sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
-        # Only pass funder if it's set - for EOA mode (sig_type=0) funder is not needed
         clob_kwargs = dict(
             key=cfg.poly_key,
             chain_id=137,
@@ -106,50 +99,18 @@ def _execute(market: Market, direction: str,
         if cfg.poly_funder and cfg.poly_funder.startswith("0x"):
             clob_kwargs["funder"] = cfg.poly_funder
         client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
-        # Inject proxy into the underlying session if available
-        if proxies and hasattr(client, "session"):
-            client.session.proxies.update(proxies)
-        elif proxies:
-            import requests as _req
-            _session = _req.Session()
-            _session.proxies.update(proxies)
-            if hasattr(client, "_session"):
-                client._session = _session
 
-        # Деривируем L2 API credentials из приватного ключа
-        # Работает для signature_type=0 (EOA) и signature_type=2 (Safe proxy)
         import time as _time
-        raw_creds = client.create_or_derive_api_creds()
-        if isinstance(raw_creds, dict):
-            from py_clob_client.clob_types import ApiCreds
-            raw_creds = ApiCreds(
-                api_key        = raw_creds["api_key"],
-                api_secret     = raw_creds["api_secret"],
-                api_passphrase = raw_creds["api_passphrase"],
-            )
-        client.set_api_creds(raw_creds)
-        log.info(f"L2 creds OK: {raw_creds.api_key[:8]}... sig_type={sig_type}")
-        _time.sleep(2)  # Пауза после деривирования — ключи активируются ~2 сек
+        creds = client.create_or_derive_api_key()
+        client.set_api_creds(creds)
+        log.info(f"L2 creds OK: {creds.api_key[:8]}... sig_type={sig_type}")
+        _time.sleep(2)
 
-        # Check CLOB balance - detailed logging for debugging
         try:
-            clob_balance = client.get_balance()
-            log.info(f"CLOB balance raw: {clob_balance}")
+            ba = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            log.info(f"pUSD balance-allowance: {ba}")
         except Exception as be:
-            log.warning(f"Balance check error: {be}")
-
-        # Check balance-allowance endpoint
-        try:
-            import requests as _req
-            ba_resp = _req.get(
-                "https://clob.polymarket.com/balance-allowance",
-                params={"asset_type": "USDC"},
-                headers=client.get_headers("GET", "/balance-allowance"),
-                timeout=5,
-            )
-            log.info(f"Balance-allowance: {ba_resp.text[:200]}")
-        except Exception as be2:
-            log.warning(f"Balance-allowance error: {be2}")
+            log.warning(f"Balance-allowance check error: {be}")
 
         token = market.token_id_yes if direction == "YES" else market.token_id_no
         if not token:
@@ -164,7 +125,7 @@ def _execute(market: Market, direction: str,
         return True
 
     except ImportError:
-        log.error("py-clob-client не установлен")
+        log.error("py_clob_client_v2 не установлен")
         return False
     except Exception as e:
         log.error(f"Execution error: {e}", exc_info=True)
@@ -561,25 +522,19 @@ class Prometheus:
         if not cfg.poly_key or not cfg.poly_funder:
             return 0.0
         try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
+            from py_clob_client_v2.client import ClobClient
+            from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
             sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
             kwargs: dict = {"key": cfg.poly_key, "chain_id": 137, "signature_type": sig_type}
             if cfg.poly_funder.startswith("0x"):
                 kwargs["funder"] = cfg.poly_funder
             client = ClobClient("https://clob.polymarket.com", **kwargs)
-            raw = client.create_or_derive_api_creds()
-            if isinstance(raw, dict):
-                raw = ApiCreds(
-                    api_key        = raw["api_key"],
-                    api_secret     = raw["api_secret"],
-                    api_passphrase = raw["api_passphrase"],
-                )
-            client.set_api_creds(raw)
-            bal = client.get_balance()
-            result = float(bal) if bal else 0.0
+            creds = client.create_or_derive_api_key()
+            client.set_api_creds(creds)
+            ba = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            result = float(ba.get("balance", 0)) if isinstance(ba, dict) else 0.0
             if result > 0:
-                log.info(f"💵 CLOB USDC balance: ${result:.2f}")
+                log.info(f"💵 CLOB pUSD balance: ${result:.2f}")
             return result
         except ImportError:
             return 0.0

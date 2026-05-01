@@ -1,7 +1,7 @@
 anthropic>=0.40.0
 requests>=2.31.0
 urllib3>=2.0.0
-py-clob-client>=0.18.0
+py_clob_client_v2>=1.0.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.0.0

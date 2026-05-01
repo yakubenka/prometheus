@@ -55,9 +55,9 @@ def sell_position_on_polymarket(token_id: str, shares: float,
         log.warning(f"sell: невозможно продать — key={bool(_key)} token={bool(token_id)} shares={shares}")
         return False, 0.0
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType, ApiCreds
-        from py_clob_client.order_builder.constants import SELL
+        from py_clob_client_v2.client import ClobClient
+        from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
+        from py_clob_client_v2.order_builder.constants import SELL
         import time as _time
 
         sig_type = int(_os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
@@ -66,14 +66,7 @@ def sell_position_on_polymarket(token_id: str, shares: float,
             clob_kwargs["funder"] = _funder
 
         client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
-        raw_creds = client.create_or_derive_api_creds()
-        if isinstance(raw_creds, dict):
-            raw_creds = ApiCreds(
-                api_key        = raw_creds["api_key"],
-                api_secret     = raw_creds["api_secret"],
-                api_passphrase = raw_creds["api_passphrase"],
-            )
-        client.set_api_creds(raw_creds)
+        client.set_api_creds(client.create_or_derive_api_key())
         _time.sleep(1)
 
         # Текущая цена
@@ -335,7 +328,7 @@ def redeem_winning_position(market_id: str, token_id: str,
         return False
 
     try:
-        from py_clob_client.client import ClobClient
+        from py_clob_client_v2.client import ClobClient
 
         sig_type = int(os.environ.get("POLYMARKET_SIGNATURE_TYPE", "0"))
         clob_kwargs = dict(key=_key, chain_id=137, signature_type=sig_type)
@@ -345,16 +338,7 @@ def redeem_winning_position(market_id: str, token_id: str,
             clob_kwargs["funder"] = funder
 
         client = ClobClient("https://clob.polymarket.com", **clob_kwargs)
-
-        raw_creds = client.create_or_derive_api_creds()
-        if isinstance(raw_creds, dict):
-            from py_clob_client.clob_types import ApiCreds
-            raw_creds = ApiCreds(
-                api_key        = raw_creds["api_key"],
-                api_secret     = raw_creds["api_secret"],
-                api_passphrase = raw_creds["api_passphrase"],
-            )
-        client.set_api_creds(raw_creds)
+        client.set_api_creds(client.create_or_derive_api_key())
 
         import time as _time
 
@@ -405,8 +389,8 @@ def redeem_winning_position(market_id: str, token_id: str,
 
         # Попытка 4: SELL winning shares (токены ценой ~$1 всё ещё торгуемы)
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType
-            from py_clob_client.order_builder.constants import SELL
+            from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client_v2.order_builder.constants import SELL
             sell_order = MarketOrderArgs(
                 token_id   = token_id,
                 amount     = shares,
@@ -423,7 +407,7 @@ def redeem_winning_position(market_id: str, token_id: str,
         return False
 
     except ImportError:
-        log.error("redeem: py-clob-client не установлен")
+        log.error("redeem: py_clob_client_v2 не установлен")
         return False
     except Exception as e:
         log.error(f"redeem error market={market_id}: {e}", exc_info=True)
