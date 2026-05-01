@@ -531,7 +531,8 @@ class Prometheus:
             creds = client.create_or_derive_api_key()
             client.set_api_creds(creds)
             ba = client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
-            result = float(ba.get("balance", 0)) if isinstance(ba, dict) else 0.0
+            # pUSD has 6 decimal places — divide by 1e6 to get dollars
+            result = float(ba.get("balance", 0)) / 1e6 if isinstance(ba, dict) else 0.0
             if result > 0:
                 log.info(f"💵 CLOB pUSD balance: ${result:.2f}")
             return result
