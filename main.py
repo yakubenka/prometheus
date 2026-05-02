@@ -196,6 +196,7 @@ class Prometheus:
         self._clob_usdc_balance:    float = 0.0     # реальный USDC в CLOB (с auth)
         self._clob_balance_synced_at: float = 0.0   # timestamp последней синхронизации
         self._fast_cycles_remaining: int  = 0       # адаптивный интервал: короткие циклы после сделки
+        self._execute_cooldown: dict[str, float] = {}  # market_id → retry_after timestamp
         self._strategy_control = StrategyControl(
             cfg.logs_dir,
             min_trades=cfg.strategy_min_trades,
@@ -732,7 +733,10 @@ class Prometheus:
                     price     = sig.entry_price,
                     error     = "execute_failed_smart_money",
                 )
-                self.tg.error(f"Ордер упал (smart money): {sig.question[:60]}")
+                now_ts = time.time()
+                if sig.market_id not in self._execute_cooldown or now_ts >= self._execute_cooldown[sig.market_id]:
+                    self.tg.error(f"Ордер упал (smart money): {sig.question[:60]}")
+                self._execute_cooldown[sig.market_id] = now_ts + 1800  # 30 min cooldown
 
         # 2. Двухэтапный анализ рынков
         # Этап 1: быстрый скрининг 100 рынков без AI
@@ -752,10 +756,19 @@ class Prometheus:
         if near_res:
             log.info(f"Near-resolution markets: {len(near_res)}")
 
+        now_ts = time.time()
+        # Expire stale cooldown entries
+        self._execute_cooldown = {k: v for k, v in self._execute_cooldown.items() if v > now_ts}
+
         for cand in candidates:
             market = cand.market
             if not self.risk.snapshot()["can_trade"]:
                 break
+
+            # Skip markets that recently failed execution (30 min cooldown)
+            if market.id in self._execute_cooldown:
+                log.debug(f"Execute cooldown active, skipping {market.question[:55]}")
+                continue
 
             result: EnsembleResult = self.signals.analyze(market, pre_score=cand.pre_score)
             log.info(
@@ -984,7 +997,10 @@ class Prometheus:
                     price     = price,
                     error     = "execute_failed",
                 )
-                self.tg.error(f"Ордер упал: {market.question[:60]}")
+                now_ts = time.time()
+                if market.id not in self._execute_cooldown or now_ts >= self._execute_cooldown[market.id]:
+                    self.tg.error(f"Ордер упал: {market.question[:60]}")
+                self._execute_cooldown[market.id] = now_ts + 1800  # 30 min cooldown
 
             time.sleep(1.5)
 
