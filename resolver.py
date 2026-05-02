@@ -80,11 +80,19 @@ def sell_position_on_polymarket(token_id: str, shares: float,
 
         # Query actual on-chain balance to avoid "not enough balance" errors from fee/slippage drift
         sell_shares = shares
-        if _funder:
+        # Derive wallet address from key if POLYMARKET_FUNDER not explicitly set
+        lookup_addr = _funder
+        if not lookup_addr and _key:
             try:
-                real_pos = fetch_polymarket_positions(_funder)
+                from eth_account import Account as _Acct
+                lookup_addr = _Acct.from_key(_key).address
+            except Exception:
+                pass
+        if lookup_addr:
+            try:
+                real_pos = fetch_polymarket_positions(lookup_addr)
                 real_size = (real_pos.get(token_id) or {}).get("size")
-                if real_size and float(real_size) > 0.01:
+                if real_size is not None and float(real_size) >= 0:
                     actual = float(real_size) * 0.995  # 0.5% safety margin
                     if actual < sell_shares:
                         log.info(f"SELL: using actual balance {actual:.4f} (computed was {sell_shares:.4f})")
@@ -115,8 +123,9 @@ def sell_position_on_polymarket(token_id: str, shares: float,
                     continue
                 raise  # any other error → propagate
 
-        log.error(f"SELL failed token={token_id[:12]}: all size factors exhausted")
-        return False, 0.0
+        # All "not enough balance" — tokens don't exist on-chain; treat as phantom position
+        log.error(f"SELL failed token={token_id[:12]}: balance exhausted, position is phantom")
+        return None, 0.0
 
     except Exception as e:
         err = str(e).lower()
@@ -600,6 +609,20 @@ class PositionResolver:
                 poly_key=poly_key,
                 funder=funder,
             )
+            if sold is None:
+                # Tokens don't exist on-chain: phantom position or already resolved.
+                # Check Gamma for resolution; if not resolved, write off as full loss.
+                handled = _handle_no_match(pos, self.risk, closed_now, self._notify)
+                if not handled:
+                    pnl = -pos.size_usd
+                    closed = self.risk.close_with_pnl(pos.market_id, exit_price=0.0, pnl=pnl)
+                    if closed:
+                        closed_now.append(self._make_closed_dict(pos, "PHANTOM_WRITEOFF", False, pnl))
+                        self._notify(pos, "PHANTOM_WRITEOFF", False, pnl, 0.0)
+                        log.warning(f"💀 Phantom position written off as loss: {pos.question[:60]}")
+                self.risk.remove_pending_action(action.market_id, "close_retry")
+                continue
+
             if sold:
                 confirmed = verify_position_closed(
                     token_id=action.token_id or pos.token_id or "",
