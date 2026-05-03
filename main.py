@@ -305,9 +305,19 @@ class Prometheus:
             self.tg.position_opened(**notify_kwargs)
             return
 
-        if not token_id or not cfg.poly_funder:
+        # Without POLYMARKET_FUNDER we can't verify on-chain, so trust _execute() result
+        if not cfg.poly_funder:
+            log.info(f"No POLYMARKET_FUNDER — opening position without on-chain verification")
+            self.risk.open(
+                market_id, question, direction, entry_price, size_usd,
+                tags, signal_type, token_id=token_id, slug=slug, url=url,
+            )
+            self.tg.position_opened(**notify_kwargs)
+            return
+
+        if not token_id:
             self._alert_and_pause(
-                f"Не могу подтвердить открытие на Polymarket: token_id/funder отсутствуют | {question[:80]}"
+                f"Не могу подтвердить открытие: token_id отсутствует | {question[:80]}"
             )
             return
 
