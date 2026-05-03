@@ -338,6 +338,7 @@ class Prometheus:
         real_positions = self._poly_client.positions_dict()
         now_ts = time.time()
 
+        log.info(f"Pending opens: {len(pending)}, on-chain positions: {len(real_positions)}")
         for action in pending:
             if not action.due(now_ts):
                 continue
@@ -346,6 +347,10 @@ class Prometheus:
                 real_size = float(real_pos.get("size", 0) or 0) if real_pos else 0.0
             except (TypeError, ValueError):
                 real_size = 0.0
+            log.info(
+                f"  Verify {action.question[:50]} | token={str(action.token_id or '')[:12]} "
+                f"| on-chain size={real_size:.4f} | attempt {action.attempts+1}/{action.max_attempts}"
+            )
             if real_size > 0.01:
                 self.risk.open(
                     action.market_id, action.question, action.direction,
@@ -355,7 +360,23 @@ class Prometheus:
                 )
                 notify_kwargs = self._pending_open_notifies.pop(action.market_id, None)
                 if notify_kwargs:
-                    self.tg.position_opened(**notify_kwargs)
+                    ok = self.tg.position_opened(**notify_kwargs)
+                    log.info(f"  📤 Telegram position_opened sent: {ok}")
+                else:
+                    # notify_kwargs lost on restart — rebuild from action and send anyway
+                    log.info(f"  📤 Telegram notify_kwargs missing (restart) — sending from action data")
+                    self.tg.position_opened(
+                        question    = action.question,
+                        direction   = action.direction,
+                        price       = action.entry_price,
+                        size        = action.size_usd,
+                        edge        = 0.0,
+                        confidence  = "medium",
+                        reasoning   = "",
+                        dry_run     = False,
+                        signal_type = action.signal_type,
+                        url         = getattr(action, 'url', ''),
+                    )
                 self.risk.remove_pending_action(action.market_id, "open_verify")
                 log.info(f"✅ Подтверждено открытие на Polymarket: {action.question[:60]}")
                 continue

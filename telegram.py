@@ -182,7 +182,7 @@ class Telegram:
         if url:
             lines += ["", f"[Открыть на Polymarket ↗]({url})"]
 
-        self.send("\n".join(lines))
+        return self.send("\n".join(lines))
 
     # ── Закрытие позиции ──────────────────────────────────────────────────────
 
