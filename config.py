@@ -120,7 +120,14 @@ class Config:
         if self.strategy_min_trades < 1:
             raise ValueError("STRATEGY_MIN_TRADES должен быть >= 1")
         if not self.dry_run and not self.poly_funder:
-            log.warning("LIVE режим без POLYMARKET_FUNDER: подтверждение позиции на Polymarket будет ограничено")
+            if self.poly_key:
+                try:
+                    from eth_account import Account
+                    key = self.poly_key if self.poly_key.startswith("0x") else "0x" + self.poly_key
+                    self.poly_funder = Account.from_key(key).address
+                    log.info(f"POLYMARKET_FUNDER auto-derived from private key: {self.poly_funder}")
+                except Exception as e:
+                    log.warning(f"Cannot derive POLYMARKET_FUNDER from key: {e} — on-chain verification limited")
 
     def summary(self) -> str:
         lines = [
