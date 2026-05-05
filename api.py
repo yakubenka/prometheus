@@ -252,7 +252,11 @@ def push(p: Push, _=Depends(_bot_auth)):
     if p.positions:
         store_set("positions", p.positions)
     if p.smart_money:
-        store_set("smart_money", p.smart_money)
+        # Athena format has "updated_at" at top level; route to separate slot
+        if "updated_at" in p.smart_money:
+            store_set("_athena_external", p.smart_money)
+        else:
+            store_set("smart_money", p.smart_money)
     if p.learning:
         store_set("learning", p.learning)
     now_str = datetime.now(timezone.utc).isoformat()
@@ -542,7 +546,34 @@ def polymarket_live(request: Request):
 
 @app.get("/api/smart_money")
 def smart_money():
-    return store_get("smart_money") or {"traders": []}
+    internal = store_get("smart_money") or {}
+    athena   = store_get("_athena_external") or {}
+    result   = dict(internal)
+    # Flatten Athena active_signals for the dashboard
+    if athena.get("traders"):
+        athena_signals = []
+        for trader in athena["traders"]:
+            for sig in trader.get("active_signals", []):
+                athena_signals.append({
+                    "address":         trader["address"],
+                    "tier":            trader.get("tier", "?"),
+                    "total_volume":    trader.get("total_volume_usd", 0),
+                    "condition_id":    sig.get("condition_id", ""),
+                    "market_question": sig.get("market_question", ""),
+                    "outcome":         sig.get("outcome", ""),
+                    "side":            sig.get("side", ""),
+                    "price":           sig.get("price", 0),
+                    "size":            sig.get("size", 0),
+                    "signal_strength": sig.get("signal_strength", ""),
+                    "trade_timestamp": sig.get("trade_timestamp", ""),
+                })
+        result["athena_signals"]    = athena_signals
+        result["athena_updated_at"] = athena.get("updated_at")
+    return result
+
+@app.get("/api/athena_external")
+def athena_external(_=Depends(_bot_auth)):
+    return store_get("_athena_external") or {}
 
 @app.get("/api/learning")
 def learning():

@@ -656,8 +656,23 @@ class Prometheus:
         for reenabled in self._strategy_control.refresh_states():
             self._notify_strategy_change(reenabled)
 
-        # 1. Smart Money
-        sm_signals = self.sm.scan()
+        # 1. Smart Money — fetch Athena external signals then run scan
+        athena_data: dict | None = None
+        api_url = cfg.api_push_url
+        if api_url:
+            try:
+                import requests as _req
+                _ar = _req.get(
+                    f"{api_url}/api/athena_external",
+                    headers={"x-bot-key": cfg.dashboard_key},
+                    timeout=4,
+                )
+                if _ar.status_code == 200:
+                    athena_data = _ar.json() or None
+            except Exception as _ae:
+                log.debug(f"Athena fetch error: {_ae}")
+
+        sm_signals = self.sm.scan(athena_data=athena_data)
         self._daily_sm_alerts += len(sm_signals)
 
         # Собираем whale alerts — все крупные сделки для дашборда
@@ -706,6 +721,8 @@ class Prometheus:
             _sm_url = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else "")
             if _execute(_Mkt(), sig.direction, decision.size_usd, sig.entry_price):
                 sm_trades += 1
+                if getattr(sig, "signal_type", "") == "athena":
+                    self.sm.mark_athena_executed(sig.market_id)
                 self._register_open_after_execution(
                     market_id=sig.market_id,
                     question=sig.question,
