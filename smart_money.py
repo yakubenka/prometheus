@@ -501,61 +501,81 @@ class SmartMoneyMonitor:
             if not _cfg.athena_copy_enabled:
                 log.info("🛑 ATHENA_COPY_ENABLED=false — Athena signals skipped")
             else:
-                now_ts = time.time()
+                now_ts          = time.time()
                 wallet_cooldown = _cfg.athena_wallet_cooldown_sec
                 athena_max_usd  = _cfg.athena_max_usd
-                # Expire stale dedup / wallet-cooldown entries
                 self._athena_dedup     = {k: v for k, v in self._athena_dedup.items()     if now_ts - v < 1800}
                 self._athena_wallet_ts = {k: v for k, v in self._athena_wallet_ts.items() if now_ts - v < wallet_cooldown}
-                for trader in athena_data["traders"]:
-                    addr  = trader.get("address", "")
-                    tier  = trader.get("tier", "C")
-                    # Per-wallet cooldown
-                    if addr and addr in self._athena_wallet_ts:
-                        elapsed = now_ts - self._athena_wallet_ts[addr]
-                        log.debug(f"Athena wallet {addr[:10]} cooldown {elapsed:.0f}s/{wallet_cooldown}s — skip")
-                        continue
-                    # ── Exit signals: Athena is telling us to close ───────────
-                _open_idx = {
+                # Build open position index once — stable across traders
+                _open_idx: dict[str, dict] = {
                     p["market_id"]: p for p in (open_positions or [])
                     if p.get("source") == "athena"
                 }
-                for sig in trader.get("active_signals", []):
-                    if sig.get("signal_type") == "exit" or sig.get("side", "").upper() in ("SELL", "EXIT"):
+
+                for trader in athena_data["traders"]:
+                    addr   = trader.get("address", "")
+                    tier   = trader.get("tier", "C")
+                    active = trader.get("active_signals", [])
+
+                    # Pass 1 — exit signals (bypass wallet cooldown)
+                    for sig in active:
+                        sig_type = sig.get("signal_type", "").lower()
+                        sig_side = sig.get("side", "").upper()
+                        if sig_type != "exit" and sig_side not in ("SELL", "EXIT"):
+                            continue
                         mid = sig.get("condition_id", "")
-                        if mid and mid in _open_idx:
-                            question = sig.get("market_question", "") or _open_idx[mid].get("question", "")
-                            exit_sig = SmartSignal(
-                                wallet      = WalletProfile(address=addr),
-                                market_id   = mid,
-                                question    = question,
-                                direction   = "EXIT",
-                                entry_price = float(sig.get("price", 0)),
-                                their_size  = float(sig.get("size", 0)),
-                                our_size    = 0.0,
-                                strength    = 1.0,
-                                signal_type = "athena_exit",
-                                reasoning   = f"Athena tier-{tier} | {addr[:10]}… signalled exit",
-                            )
-                            signals.append(exit_sig)
-                            log.info(
-                                f"  🏛 Athena EXIT | {question[:60]} | wallet={addr[:10]}…"
-                            )
+                        if not mid or mid not in _open_idx:
+                            continue
+                        question = sig.get("market_question", "") or _open_idx[mid].get("question", "")
+                        signals.append(SmartSignal(
+                            wallet      = WalletProfile(address=addr or "unknown"),
+                            market_id   = mid,
+                            question    = question,
+                            direction   = "EXIT",
+                            entry_price = float(sig.get("price", 0)),
+                            their_size  = float(sig.get("size", 0)),
+                            our_size    = 0.0,
+                            strength    = 1.0,
+                            signal_type = "athena_exit",
+                            reasoning   = f"Athena tier-{tier} | {(addr or 'unknown')[:10]}… exit",
+                        ))
+                        log.info(f"  🏛 Athena EXIT | {question[:60]} | wallet={(addr or '?')[:10]}…")
+
+                    # Pass 2 — buy signals (wallet cooldown applies)
+                    if addr and addr in self._athena_wallet_ts:
+                        elapsed = now_ts - self._athena_wallet_ts[addr]
+                        log.debug(f"Athena wallet {addr[:10]} cooldown {elapsed:.0f}s/{wallet_cooldown}s — skip buys")
                         continue
 
-                for sig in trader.get("active_signals", []):
+                    for sig in active:
+                        sig_type = sig.get("signal_type", "").lower()
+                        sig_side = sig.get("side", "BUY").upper()
+                        if sig_type == "exit" or sig_side in ("SELL", "EXIT"):
+                            continue
                         strength_label = sig.get("signal_strength", "weak")
                         if strength_label not in ("strong", "medium"):
                             continue
                         market_id = sig.get("condition_id", "")
                         if not market_id or market_id in self._athena_dedup:
                             continue
-                        # Only follow BUY entries, not exits
-                        if sig.get("side", "BUY") != "BUY":
+                        # Stale signal filter — ignore signals older than 60 min
+                        minutes_ago = 0.0
+                        try:
+                            ts_str = sig.get("trade_timestamp", "")
+                            if ts_str:
+                                ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                minutes_ago = (datetime.now(timezone.utc) - ts_dt).total_seconds() / 60
+                                if minutes_ago > 60:
+                                    log.debug(f"Athena stale {minutes_ago:.0f}min — skip: {market_id[:16]}")
+                                    continue
+                        except Exception:
+                            pass
+                        direction   = sig.get("outcome", "YES")
+                        strength    = {"strong": 0.9, "medium": 0.6}.get(strength_label, 0.3)
+                        entry_price = float(sig.get("price", 0.5))
+                        if not (0.01 < entry_price < 0.99):
+                            log.warning(f"Athena invalid price={entry_price:.3f} — skip")
                             continue
-                        direction = sig.get("outcome", "YES")  # YES or NO
-                        strength  = {"strong": 0.9, "medium": 0.6}.get(strength_label, 0.3)
-                        # Build a lightweight WalletProfile from Athena metadata
                         t_class = (
                             TraderClass.INSIDER    if tier in ("S",)    else
                             TraderClass.SHARP      if tier in ("A",)    else
@@ -569,7 +589,6 @@ class SmartMoneyMonitor:
                             total_trades  = trader.get("total_trades", 0),
                             total_volume  = trader.get("total_volume_usd", 0),
                         )
-                        entry_price = float(sig.get("price", 0.5))
                         their_size  = float(sig.get("size", 0))
                         our_size    = round(min(athena_max_usd * strength, athena_max_usd), 2)
                         question    = sig.get("market_question", "")
@@ -597,16 +616,6 @@ class SmartMoneyMonitor:
                         except Exception as _e:
                             log.debug(f"Athena token_id fetch failed: {_e}")
 
-                        # minutes_ago from trade_timestamp
-                        minutes_ago = 0.0
-                        try:
-                            ts_str = sig.get("trade_timestamp", "")
-                            if ts_str:
-                                ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                                minutes_ago = (datetime.now(timezone.utc) - ts_dt).total_seconds() / 60
-                        except Exception:
-                            pass
-
                         athena_sig = SmartSignal(
                             wallet      = profile,
                             market_id   = market_id,
@@ -623,24 +632,32 @@ class SmartMoneyMonitor:
                             slug        = _slug,
                         )
                         signals.append(athena_sig)
-                        self._athena_wallet_ts[addr] = now_ts
+                        if addr:
+                            self._athena_wallet_ts[addr] = now_ts
                         log.info(
                             f"  🏛 Athena tier-{tier} | {question[:50]} "
                             f"| {direction} ${their_size:,.0f} strength={strength_label}"
                         )
 
-        # Дедупликация + сортировка по силе сигнала
+        # Exit signals bypass cap; buy signals deduped/capped
+        _exits = [s for s in signals if s.signal_type == "athena_exit"]
+        _buys  = [s for s in signals if s.signal_type != "athena_exit"]
         seen_mkts: set[str] = set()
         unique: list[SmartSignal] = []
-        for s in sorted(signals, key=lambda x: x.strength, reverse=True):
+        for s in sorted(_buys, key=lambda x: x.strength, reverse=True):
             key = f"{s.market_id}_{s.direction}"
             if key not in seen_mkts:
                 seen_mkts.add(key)
                 unique.append(s)
             if len(unique) >= self.MAX_SIGNALS:
                 break
+        seen_exits: set[str] = set()
+        for s in _exits:
+            if s.market_id not in seen_exits:
+                seen_exits.add(s.market_id)
+                unique.append(s)
 
-        log.info(f"Smart Money сигналов: {len(unique)}")
+        log.info(f"Smart Money сигналов: {len(unique)} ({len(_exits)} exits)")
         return unique
 
     def mark_athena_executed(self, market_id: str) -> None:

@@ -35,6 +35,7 @@ _STRATEGY_LABELS = {
     "market_data":      "Market Data",
     "smart_money":      "Smart Money",
     "near_resolution":  "Near Resolution",
+    "athena":           "🏛 Athena",
 }
 _CATEGORY_LABELS = {
     "electoral":    "🗳 Electoral",
@@ -314,6 +315,60 @@ class Telegram:
         ]
         if url:
             lines += ["", f"[Polymarket ↗]({url})"]
+        self.send("\n".join(lines))
+
+    # ── Athena copy-trading ───────────────────────────────────────────────────
+
+    def athena_opened(
+        self,
+        question:   str,
+        direction:  str,
+        price:      float,
+        their_size: float,
+        our_size:   float,
+        tier:       str,
+        wallet:     str,
+        reasoning:  str,
+        dry_run:    bool,
+        url:        str = "",
+    ) -> None:
+        dir_icon  = "🟢" if direction == "YES" else "🔴"
+        mode      = "PAPER" if dry_run else "LIVE"
+        tier_icon = {"S": "🔴", "A": "🟡", "B": "🔵"}.get(tier, "⚪")
+        their_str = f"${their_size/1000:.0f}k" if their_size >= 1000 else f"${their_size:.0f}"
+        wallet_s  = (wallet[:10] + "…") if len(wallet) > 10 else wallet
+
+        lines = [
+            f"🏛 *Athena · {mode} · Tier-{tier} {tier_icon}*",
+            f"",
+            f"*{question[:90]}*",
+            f"",
+            f"{dir_icon} *{direction}*  @  `{price:.3f}`",
+            f"Их ставка: *{their_str}*  ·  Наша: *${our_size:.2f}*",
+            f"Кошелёк: `{wallet_s}`",
+            f"",
+            f"_{reasoning[:140]}_",
+        ]
+        if url:
+            lines += ["", f"[Polymarket ↗]({url})"]
+        self.send("\n".join(lines))
+
+    def athena_exit_signal(
+        self,
+        question:    str,
+        wallet:      str = "",
+        tier:        str = "",
+    ) -> None:
+        wallet_s = (wallet[:10] + "…") if len(wallet) > 10 else (wallet or "—")
+        tier_s   = f"Tier-{tier}" if tier else ""
+        lines = [
+            f"🏛 *Athena — сигнал на выход*",
+            f"",
+            f"*{question[:90]}*",
+            f"",
+            f"Кошелёк: `{wallet_s}`  {tier_s}",
+            f"_Закрываем копируемую позицию_",
+        ]
         self.send("\n".join(lines))
 
     # ── Отчёты ────────────────────────────────────────────────────────────────

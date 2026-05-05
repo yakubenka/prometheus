@@ -696,9 +696,10 @@ class Prometheus:
                 )
                 self.risk._audit("ATHENA_EXIT", pos.market_id, pos.size_usd, "athena_exit_copy")
                 log.info(f"🏛 Athena EXIT copy registered | {pos.question[:60]}")
-                self.tg.send(
-                    f"🏛 *Athena exit signal* — закрываем позицию\n"
-                    f"_{pos.question[:100]}_"
+                self.tg.athena_exit_signal(
+                    question = pos.question,
+                    wallet   = getattr(esig.wallet, "address", ""),
+                    tier     = esig.reasoning.split("tier-")[1][0] if "tier-" in esig.reasoning else "",
                 )
 
         self._daily_sm_alerts += len(sm_signals)
@@ -779,18 +780,33 @@ class Prometheus:
                         "timing": "",
                     },
                 )
-                self.tg.insider_detected(
-                    question     = sig.question,
-                    direction    = sig.direction,
-                    price        = sig.entry_price,
-                    their_size   = sig.their_size,
-                    our_size     = decision.size_usd,
-                    trader_class = sig.wallet.trader_class.value,
-                    win_rate     = sig.wallet.win_rate,
-                    roi          = sig.wallet.roi,
-                    reasoning    = sig.reasoning,
-                    url          = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
-                )
+                if _is_athena:
+                    _tier = "S" if sig.wallet.win_rate >= 0.70 else ("A" if sig.wallet.win_rate >= 0.60 else "B")
+                    self.tg.athena_opened(
+                        question   = sig.question,
+                        direction  = sig.direction,
+                        price      = sig.entry_price,
+                        their_size = sig.their_size,
+                        our_size   = decision.size_usd,
+                        tier       = _tier,
+                        wallet     = sig.wallet.address,
+                        reasoning  = sig.reasoning,
+                        dry_run    = cfg.dry_run,
+                        url        = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
+                    )
+                else:
+                    self.tg.insider_detected(
+                        question     = sig.question,
+                        direction    = sig.direction,
+                        price        = sig.entry_price,
+                        their_size   = sig.their_size,
+                        our_size     = decision.size_usd,
+                        trader_class = sig.wallet.trader_class.value,
+                        win_rate     = sig.wallet.win_rate,
+                        roi          = sig.wallet.roi,
+                        reasoning    = sig.reasoning,
+                        url          = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else ""),
+                    )
             elif not cfg.dry_run:
                 _dead_letter(
                     market_id = sig.market_id,
