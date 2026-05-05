@@ -434,6 +434,8 @@ class SmartMoneyMonitor:
         self._total_scanned:   int = 0
         # Dedup: market_ids recently executed from Athena signals (market_id → ts)
         self._athena_dedup:    dict[str, float] = {}
+        # Per-wallet cooldown: wallet_address → last signal ts
+        self._athena_wallet_ts: dict[str, float] = {}
 
     def scan(self, athena_data: dict | None = None) -> list[SmartSignal]:
         log.info("🔍 Smart Money скан...")
@@ -491,96 +493,109 @@ class SmartMoneyMonitor:
 
         # ── Athena external signals ───────────────────────────────────────────────
         if athena_data and athena_data.get("traders"):
-            now_ts = time.time()
-            # Expire stale dedup entries (>30 min)
-            self._athena_dedup = {k: v for k, v in self._athena_dedup.items() if now_ts - v < 1800}
-            for trader in athena_data["traders"]:
-                addr  = trader.get("address", "")
-                tier  = trader.get("tier", "C")
-                for sig in trader.get("active_signals", []):
-                    strength_label = sig.get("signal_strength", "weak")
-                    if strength_label not in ("strong", "medium"):
+            from config import cfg as _cfg
+            if not _cfg.athena_copy_enabled:
+                log.info("🛑 ATHENA_COPY_ENABLED=false — Athena signals skipped")
+            else:
+                now_ts = time.time()
+                wallet_cooldown = _cfg.athena_wallet_cooldown_sec
+                athena_max_usd  = _cfg.athena_max_usd
+                # Expire stale dedup / wallet-cooldown entries
+                self._athena_dedup     = {k: v for k, v in self._athena_dedup.items()     if now_ts - v < 1800}
+                self._athena_wallet_ts = {k: v for k, v in self._athena_wallet_ts.items() if now_ts - v < wallet_cooldown}
+                for trader in athena_data["traders"]:
+                    addr  = trader.get("address", "")
+                    tier  = trader.get("tier", "C")
+                    # Per-wallet cooldown
+                    if addr and addr in self._athena_wallet_ts:
+                        elapsed = now_ts - self._athena_wallet_ts[addr]
+                        log.debug(f"Athena wallet {addr[:10]} cooldown {elapsed:.0f}s/{wallet_cooldown}s — skip")
                         continue
-                    market_id = sig.get("condition_id", "")
-                    if not market_id or market_id in self._athena_dedup:
-                        continue
-                    # Only follow BUY entries, not exits
-                    if sig.get("side", "BUY") != "BUY":
-                        continue
-                    direction = sig.get("outcome", "YES")  # YES or NO
-                    strength  = {"strong": 0.9, "medium": 0.6}.get(strength_label, 0.3)
-                    # Build a lightweight WalletProfile from Athena metadata
-                    t_class = (
-                        TraderClass.INSIDER    if tier in ("S",)    else
-                        TraderClass.SHARP      if tier in ("A",)    else
-                        TraderClass.CONTRARIAN
-                    )
-                    profile = WalletProfile(
-                        address       = addr,
-                        trader_class  = t_class,
-                        win_rate      = {"S": 0.72, "A": 0.63, "B": 0.55}.get(tier, 0.50),
-                        roi           = {"S": 0.35, "A": 0.20, "B": 0.10}.get(tier, 0.05),
-                        total_trades  = trader.get("total_trades", 0),
-                        total_volume  = trader.get("total_volume_usd", 0),
-                    )
-                    entry_price = float(sig.get("price", 0.5))
-                    their_size  = float(sig.get("size", 0))
-                    our_size    = round(min(self.max_position_usd * strength, self.max_position_usd), 2)
-                    question    = sig.get("market_question", "")
-                    reasoning   = (
-                        f"Athena tier-{tier} | {addr[:10]}…\n"
-                        f"{strength_label.upper()} | ${their_size:,.0f} @ {entry_price:.2%}"
-                    )
-                    # Fetch token_id + slug from Gamma API
-                    _token_id, _slug = "", ""
-                    try:
-                        _r = requests.get(
-                            f"https://gamma-api.polymarket.com/markets/{market_id}", timeout=5
+                    for sig in trader.get("active_signals", []):
+                        strength_label = sig.get("signal_strength", "weak")
+                        if strength_label not in ("strong", "medium"):
+                            continue
+                        market_id = sig.get("condition_id", "")
+                        if not market_id or market_id in self._athena_dedup:
+                            continue
+                        # Only follow BUY entries, not exits
+                        if sig.get("side", "BUY") != "BUY":
+                            continue
+                        direction = sig.get("outcome", "YES")  # YES or NO
+                        strength  = {"strong": 0.9, "medium": 0.6}.get(strength_label, 0.3)
+                        # Build a lightweight WalletProfile from Athena metadata
+                        t_class = (
+                            TraderClass.INSIDER    if tier in ("S",)    else
+                            TraderClass.SHARP      if tier in ("A",)    else
+                            TraderClass.CONTRARIAN
                         )
-                        if _r.status_code == 200:
-                            _m = _r.json()
-                            _slug   = _m.get("groupSlug") or _m.get("slug") or ""
-                            _tokens = _m.get("clobTokenIds") or []
-                            if isinstance(_tokens, str):
-                                import json as _json
-                                _tokens = _json.loads(_tokens)
-                            if direction == "YES" and len(_tokens) >= 1:
-                                _token_id = str(_tokens[0])
-                            elif direction == "NO" and len(_tokens) >= 2:
-                                _token_id = str(_tokens[1])
-                    except Exception as _e:
-                        log.debug(f"Athena token_id fetch failed: {_e}")
+                        profile = WalletProfile(
+                            address       = addr,
+                            trader_class  = t_class,
+                            win_rate      = {"S": 0.72, "A": 0.63, "B": 0.55}.get(tier, 0.50),
+                            roi           = {"S": 0.35, "A": 0.20, "B": 0.10}.get(tier, 0.05),
+                            total_trades  = trader.get("total_trades", 0),
+                            total_volume  = trader.get("total_volume_usd", 0),
+                        )
+                        entry_price = float(sig.get("price", 0.5))
+                        their_size  = float(sig.get("size", 0))
+                        our_size    = round(min(athena_max_usd * strength, athena_max_usd), 2)
+                        question    = sig.get("market_question", "")
+                        reasoning   = (
+                            f"Athena tier-{tier} | {addr[:10]}…\n"
+                            f"{strength_label.upper()} | ${their_size:,.0f} @ {entry_price:.2%}"
+                        )
+                        # Fetch token_id + slug from Gamma API
+                        _token_id, _slug = "", ""
+                        try:
+                            _r = requests.get(
+                                f"https://gamma-api.polymarket.com/markets/{market_id}", timeout=5
+                            )
+                            if _r.status_code == 200:
+                                _m = _r.json()
+                                _slug   = _m.get("groupSlug") or _m.get("slug") or ""
+                                _tokens = _m.get("clobTokenIds") or []
+                                if isinstance(_tokens, str):
+                                    import json as _json
+                                    _tokens = _json.loads(_tokens)
+                                if direction == "YES" and len(_tokens) >= 1:
+                                    _token_id = str(_tokens[0])
+                                elif direction == "NO" and len(_tokens) >= 2:
+                                    _token_id = str(_tokens[1])
+                        except Exception as _e:
+                            log.debug(f"Athena token_id fetch failed: {_e}")
 
-                    # minutes_ago from trade_timestamp
-                    minutes_ago = 0.0
-                    try:
-                        ts_str = sig.get("trade_timestamp", "")
-                        if ts_str:
-                            ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                            minutes_ago = (datetime.now(timezone.utc) - ts_dt).total_seconds() / 60
-                    except Exception:
-                        pass
+                        # minutes_ago from trade_timestamp
+                        minutes_ago = 0.0
+                        try:
+                            ts_str = sig.get("trade_timestamp", "")
+                            if ts_str:
+                                ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                minutes_ago = (datetime.now(timezone.utc) - ts_dt).total_seconds() / 60
+                        except Exception:
+                            pass
 
-                    athena_sig = SmartSignal(
-                        wallet      = profile,
-                        market_id   = market_id,
-                        question    = question,
-                        direction   = direction,
-                        entry_price = entry_price,
-                        their_size  = their_size,
-                        our_size    = our_size,
-                        strength    = strength,
-                        signal_type = "athena",
-                        reasoning   = reasoning,
-                        minutes_ago = minutes_ago,
-                        token_id    = _token_id,
-                        slug        = _slug,
-                    )
-                    signals.append(athena_sig)
-                    log.info(
-                        f"  🏛 Athena tier-{tier} | {question[:50]} "
-                        f"| {direction} ${their_size:,.0f} strength={strength_label}"
-                    )
+                        athena_sig = SmartSignal(
+                            wallet      = profile,
+                            market_id   = market_id,
+                            question    = question,
+                            direction   = direction,
+                            entry_price = entry_price,
+                            their_size  = their_size,
+                            our_size    = our_size,
+                            strength    = strength,
+                            signal_type = "athena",
+                            reasoning   = reasoning,
+                            minutes_ago = minutes_ago,
+                            token_id    = _token_id,
+                            slug        = _slug,
+                        )
+                        signals.append(athena_sig)
+                        self._athena_wallet_ts[addr] = now_ts
+                        log.info(
+                            f"  🏛 Athena tier-{tier} | {question[:50]} "
+                            f"| {direction} ${their_size:,.0f} strength={strength_label}"
+                        )
 
         # Дедупликация + сортировка по силе сигнала
         seen_mkts: set[str] = set()

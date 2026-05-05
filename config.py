@@ -58,6 +58,11 @@ class Config:
     max_correlated: float = _f("MAX_CORRELATED_USD", 60.0)
     kelly_frac:     float = _f("KELLY_FRACTION", 0.20)
 
+    # Athena copy-trading
+    athena_copy_enabled:         bool  = _b("ATHENA_COPY_ENABLED", True)
+    athena_max_usd:              float = _f("ATHENA_MAX_USD", 20.0)
+    athena_wallet_cooldown_sec:  int   = _i("ATHENA_WALLET_COOLDOWN_SEC", 300)
+
     min_edge:       float = _f("MIN_EDGE", 0.05)
     min_volume:     float = _f("MIN_VOLUME_24H", 10_000)
     low_liquidity_size_usd: float = _f("LOW_LIQUIDITY_SIZE_USD", 3.0)
@@ -140,6 +145,8 @@ class Config:
             f"Trade quality: {self.min_trade_quality}",
             f"AI mode:       {self.ai_mode} (budget {self.ai_request_budget_per_cycle}/cycle)",
             f"Strategy ctl:  n={self.strategy_min_trades}, weaken x{self.strategy_weakened_size_mult:.2f}, reenable {self.strategy_reenable_days}d",
+            f"Athena copy:   {'✅ enabled' if self.athena_copy_enabled else '🛑 DISABLED'} "
+            f"(max ${self.athena_max_usd}, wallet cooldown {self.athena_wallet_cooldown_sec}s)",
             f"Scan interval: {self.scan_interval}s",
             f"Open verify:   {self.open_verify_interval_sec}s",
             f"Close retry:   {self.close_retry_interval_sec}s x {self.max_order_retries}",
