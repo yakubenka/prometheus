@@ -329,6 +329,26 @@ def debug_telegram(_=Depends(_bot_auth)):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def _source_stats(source: str) -> dict:
+    """Compute PnL/WR stats for positions with a given source tag."""
+    pos_data = store_get("positions") or {}
+    history  = pos_data.get("history", [])
+    open_pos = pos_data.get("open", [])
+    today    = datetime.now(timezone.utc).date().isoformat()
+    hist = [p for p in history if p.get("source", "prometheus") == source]
+    opn  = [p for p in open_pos if p.get("source", "prometheus") == source]
+    td   = [p for p in hist if (p.get("closed_at") or "")[:10] == today]
+    wins = sum(1 for p in hist if float(p.get("pnl") or 0) > 0)
+    return {
+        "total_trades":   len(hist),
+        "open_positions": len(opn),
+        "pnl_total":      round(sum(float(p.get("pnl") or 0) for p in hist), 2),
+        "pnl_today":      round(sum(float(p.get("pnl") or 0) for p in td), 2),
+        "win_rate":       round(wins / len(hist), 3) if hist else 0.0,
+    }
+
+_EMPTY_SRC = {"total_trades": 0, "open_positions": 0, "pnl_total": 0, "pnl_today": 0, "win_rate": 0.0}
+
 @app.get("/api/overview")
 def overview(request: Request):
     if _rate_limited(_client_ip(request), limit=60, window=60):
@@ -337,6 +357,10 @@ def overview(request: Request):
     if d:
         d = dict(d)
         d["bot_running"] = _alive()
+        d["by_source"] = {
+            "athena":     _source_stats("athena"),
+            "prometheus": _source_stats("prometheus"),
+        }
         return d
     return {
         "bot_running": _alive(), "dry_run": True,
@@ -346,6 +370,7 @@ def overview(request: Request):
         "portfolio_value": 0, "total_invested": 0, "poly_sync_at": None,
         "daily_loss_used": 0, "signals_today": 0, "smart_money_today": 0,
         "poly_configured": bool(POLY_FUNDER),
+        "by_source": {"athena": dict(_EMPTY_SRC), "prometheus": dict(_EMPTY_SRC)},
     }
 
 @app.get("/api/signals")
@@ -360,10 +385,19 @@ def signals(request: Request, limit: int = 30):
     return {"signals": []}
 
 @app.get("/api/positions")
-def positions(request: Request):
+def positions(request: Request, source: Optional[str] = None):
     if _rate_limited(_client_ip(request), limit=60, window=60):
         raise HTTPException(429, "Too many requests")
-    return store_get("positions") or {"open": [], "closed_today": [], "history": []}
+    data = store_get("positions") or {"open": [], "closed_today": [], "history": []}
+    if source:
+        def _filter(items):
+            return [p for p in (items or []) if p.get("source", "prometheus") == source]
+        return {
+            "open":         _filter(data.get("open", [])),
+            "closed_today": _filter(data.get("closed_today", [])),
+            "history":      _filter(data.get("history", [])),
+        }
+    return data
 
 @app.post("/api/close_position")
 async def close_position(request: Request, _=Depends(_manual_close_auth)):

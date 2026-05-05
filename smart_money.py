@@ -437,7 +437,11 @@ class SmartMoneyMonitor:
         # Per-wallet cooldown: wallet_address → last signal ts
         self._athena_wallet_ts: dict[str, float] = {}
 
-    def scan(self, athena_data: dict | None = None) -> list[SmartSignal]:
+    def scan(
+        self,
+        athena_data:    dict | None = None,
+        open_positions: list | None = None,   # list of dicts with market_id + source fields
+    ) -> list[SmartSignal]:
         log.info("🔍 Smart Money скан...")
         signals: list[SmartSignal] = []
         seen:    set[str]          = set()
@@ -511,7 +515,35 @@ class SmartMoneyMonitor:
                         elapsed = now_ts - self._athena_wallet_ts[addr]
                         log.debug(f"Athena wallet {addr[:10]} cooldown {elapsed:.0f}s/{wallet_cooldown}s — skip")
                         continue
-                    for sig in trader.get("active_signals", []):
+                    # ── Exit signals: Athena is telling us to close ───────────
+                _open_idx = {
+                    p["market_id"]: p for p in (open_positions or [])
+                    if p.get("source") == "athena"
+                }
+                for sig in trader.get("active_signals", []):
+                    if sig.get("signal_type") == "exit" or sig.get("side", "").upper() in ("SELL", "EXIT"):
+                        mid = sig.get("condition_id", "")
+                        if mid and mid in _open_idx:
+                            question = sig.get("market_question", "") or _open_idx[mid].get("question", "")
+                            exit_sig = SmartSignal(
+                                wallet      = WalletProfile(address=addr),
+                                market_id   = mid,
+                                question    = question,
+                                direction   = "EXIT",
+                                entry_price = float(sig.get("price", 0)),
+                                their_size  = float(sig.get("size", 0)),
+                                our_size    = 0.0,
+                                strength    = 1.0,
+                                signal_type = "athena_exit",
+                                reasoning   = f"Athena tier-{tier} | {addr[:10]}… signalled exit",
+                            )
+                            signals.append(exit_sig)
+                            log.info(
+                                f"  🏛 Athena EXIT | {question[:60]} | wallet={addr[:10]}…"
+                            )
+                        continue
+
+                for sig in trader.get("active_signals", []):
                         strength_label = sig.get("signal_strength", "weak")
                         if strength_label not in ("strong", "medium"):
                             continue

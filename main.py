@@ -672,7 +672,35 @@ class Prometheus:
             except Exception as _ae:
                 log.debug(f"Athena fetch error: {_ae}")
 
-        sm_signals = self.sm.scan(athena_data=athena_data)
+        _open_athena = [
+            {"market_id": p.market_id, "source": "athena", "question": p.question}
+            for p in self.risk.open_positions
+            if p.signal_type == "athena"
+        ]
+        sm_signals = self.sm.scan(athena_data=athena_data, open_positions=_open_athena)
+
+        # Handle Athena exit signals before buy logic
+        _exit_sigs = [s for s in sm_signals if s.signal_type == "athena_exit"]
+        sm_signals  = [s for s in sm_signals if s.signal_type != "athena_exit"]
+        for esig in _exit_sigs:
+            pos = next(
+                (p for p in self.risk.open_positions
+                 if p.market_id == esig.market_id and p.signal_type == "athena"),
+                None,
+            )
+            if pos:
+                self.risk.register_pending_close(
+                    pos=pos, reason="athena_exit_copy",
+                    max_attempts=cfg.max_order_retries,
+                    interval_sec=cfg.close_retry_interval_sec,
+                )
+                self.risk._audit("ATHENA_EXIT", pos.market_id, pos.size_usd, "athena_exit_copy")
+                log.info(f"🏛 Athena EXIT copy registered | {pos.question[:60]}")
+                self.tg.send(
+                    f"🏛 *Athena exit signal* — закрываем позицию\n"
+                    f"_{pos.question[:100]}_"
+                )
+
         self._daily_sm_alerts += len(sm_signals)
 
         # Собираем whale alerts — все крупные сделки для дашборда
@@ -719,9 +747,10 @@ class Prometheus:
                 token_id_no  = sig.token_id if sig.direction == "NO"  else None
 
             _sm_url = (f"https://polymarket.com/event/{sig.slug}" if sig.slug else "")
+            _is_athena = getattr(sig, "signal_type", "") == "athena"
             if _execute(_Mkt(), sig.direction, decision.size_usd, sig.entry_price):
                 sm_trades += 1
-                if getattr(sig, "signal_type", "") == "athena":
+                if _is_athena:
                     self.sm.mark_athena_executed(sig.market_id)
                 self._register_open_after_execution(
                     market_id=sig.market_id,
@@ -730,7 +759,7 @@ class Prometheus:
                     entry_price=sig.entry_price,
                     size_usd=decision.size_usd,
                     tags=list(sig.wallet.specializations),
-                    signal_type="smart_money",
+                    signal_type="athena" if _is_athena else "smart_money",
                     token_id=sig.token_id or None,
                     slug=sig.slug or None,
                     url=_sm_url,
@@ -1226,6 +1255,7 @@ class Prometheus:
                     "url":           polymarket_url(p),
                     "slug":          getattr(p, "slug", "") or "",
                     "token_id":      p.token_id or "",
+                    "source":        "athena" if p.signal_type == "athena" else "prometheus",
                 }
 
             # Форматируем позиции (цены из Polymarket через кэш, без доп. запросов)
