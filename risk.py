@@ -119,9 +119,9 @@ class RiskManager:
     def __init__(
         self,
         max_position_usd:   float = 20.0,
-        max_daily_loss_usd: float = 50.0,
+        max_daily_loss_usd: float = 200.0,
         max_open_positions: int   = 5,
-        max_correlated_usd: float = 35.0,
+        max_correlated_usd: float = 60.0,
         kelly_fraction:     float = 0.20,
         data_dir:           str   = "/app/logs",
     ):
