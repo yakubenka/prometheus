@@ -28,6 +28,7 @@ from position_review import PositionReviewer
 from domain_intel import DomainPrior, build_market_context, portfolio_kelly_size
 from liquidity import is_market_liquid, check_liquidity, liquidity_size_mult
 from strategy_control import StrategyControl
+from api import store_get
 from polymarket_client import PolymarketClient
 
 import logging
@@ -656,21 +657,8 @@ class Prometheus:
         for reenabled in self._strategy_control.refresh_states():
             self._notify_strategy_change(reenabled)
 
-        # 1. Smart Money — fetch Athena external signals then run scan
-        athena_data: dict | None = None
-        api_url = cfg.api_push_url
-        if api_url:
-            try:
-                import requests as _req
-                _ar = _req.get(
-                    f"{api_url}/api/athena_external",
-                    headers={"x-bot-key": cfg.dashboard_key},
-                    timeout=4,
-                )
-                if _ar.status_code == 200:
-                    athena_data = _ar.json() or None
-            except Exception as _ae:
-                log.debug(f"Athena fetch error: {_ae}")
+        # 1. Smart Money — read Athena external signals directly from store (no HTTP round-trip)
+        athena_data: dict | None = store_get("_athena_external") or None
 
         _open_athena = [
             {"market_id": p.market_id, "source": "athena", "question": p.question}
