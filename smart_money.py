@@ -590,20 +590,28 @@ class SmartMoneyMonitor:
                             total_volume  = trader.get("total_volume_usd", 0),
                         )
                         their_size  = float(sig.get("size", 0))
+                        their_usd   = their_size * entry_price
+                        if their_usd < 50.0:
+                            log.debug(f"Athena skip — their size ${their_usd:.0f} < $50 min: {market_id[:16]}")
+                            continue
                         our_size    = round(min(athena_max_usd * strength, athena_max_usd), 2)
                         question    = sig.get("market_question", "")
                         reasoning   = (
                             f"Athena tier-{tier} | {addr[:10]}…\n"
-                            f"{strength_label.upper()} | ${their_size:,.0f} @ {entry_price:.2%}"
+                            f"{strength_label.upper()} | ${their_usd:,.0f} @ {entry_price:.2%}"
                         )
-                        # Fetch token_id + slug from Gamma API
+                        # Fetch token_id + slug — use ?conditionId= query param (not /markets/{id} path)
                         _token_id, _slug = "", ""
                         try:
                             _r = requests.get(
-                                f"https://gamma-api.polymarket.com/markets/{market_id}", timeout=5
+                                "https://gamma-api.polymarket.com/markets",
+                                params={"conditionId": market_id},
+                                timeout=5,
                             )
                             if _r.status_code == 200:
-                                _m = _r.json()
+                                _data   = _r.json()
+                                _items  = _data if isinstance(_data, list) else _data.get("data", [_data])
+                                _m      = _items[0] if _items else {}
                                 _slug   = _m.get("groupSlug") or _m.get("slug") or ""
                                 _tokens = _m.get("clobTokenIds") or []
                                 if isinstance(_tokens, str):
@@ -613,8 +621,10 @@ class SmartMoneyMonitor:
                                     _token_id = str(_tokens[0])
                                 elif direction == "NO" and len(_tokens) >= 2:
                                     _token_id = str(_tokens[1])
+                            if not _token_id:
+                                log.warning(f"Athena token_id not found for {market_id[:20]} direction={direction}")
                         except Exception as _e:
-                            log.debug(f"Athena token_id fetch failed: {_e}")
+                            log.warning(f"Athena token_id fetch failed: {_e}")
 
                         athena_sig = SmartSignal(
                             wallet      = profile,
